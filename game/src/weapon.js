@@ -109,7 +109,19 @@ function buildModel(kind) {
     sight.position.set(0, 0.058, -0.02);
     const dot = new THREE.Mesh(new THREE.BoxGeometry(0.008, 0.008, 0.004), glow);
     dot.position.set(0, 0.062, -0.046);
-    model.add(receiver, handguard, barrel, stock, mag, sight, dot);
+    // Small parts that break the silhouette: a brake at the muzzle, a pistol grip, a top
+    // rail and a charging handle. Cheap boxes, but they stop the gun reading as two slabs.
+    const brake = new THREE.Mesh(new THREE.CylinderGeometry(0.019, 0.019, 0.05, 8), steel);
+    brake.rotation.x = Math.PI / 2;
+    brake.position.set(0, 0.012, -0.525);
+    const grip = new THREE.Mesh(new THREE.BoxGeometry(0.036, 0.1, 0.05), dark);
+    grip.position.set(0, -0.085, 0.11);
+    grip.rotation.x = -0.3;
+    const rail = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.012, 0.26), steel);
+    rail.position.set(0, 0.045, -0.14);
+    const handle = new THREE.Mesh(new THREE.BoxGeometry(0.014, 0.014, 0.05), steel);
+    handle.position.set(-0.036, 0.02, 0.06);
+    model.add(receiver, handguard, barrel, stock, mag, sight, dot, brake, grip, rail, handle);
   } else if (kind === 'smg') {
     const receiver = new THREE.Mesh(new THREE.BoxGeometry(0.056, 0.072, 0.24), steel);
     const shroud = new THREE.Mesh(new THREE.BoxGeometry(0.042, 0.046, 0.14), dark);
@@ -121,7 +133,12 @@ function buildModel(kind) {
     mag.position.set(0, -0.115, 0.0);
     const brace = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.05, 0.12), dark);
     brace.position.set(0, -0.01, 0.17);
-    model.add(receiver, shroud, barrel, mag, brace);
+    const grip = new THREE.Mesh(new THREE.BoxGeometry(0.032, 0.09, 0.045), dark);
+    grip.position.set(0, -0.075, 0.09);
+    grip.rotation.x = -0.28;
+    const rail = new THREE.Mesh(new THREE.BoxGeometry(0.026, 0.01, 0.18), steel);
+    rail.position.set(0, 0.04, -0.1);
+    model.add(receiver, shroud, barrel, mag, brace, grip, rail);
   } else {
     const slide = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.05, 0.19), steel);
     const frame = new THREE.Mesh(new THREE.BoxGeometry(0.036, 0.03, 0.14), dark);
@@ -134,8 +151,43 @@ function buildModel(kind) {
     model.add(slide, frame, grip, dot);
   }
 
+  // Hands: two gloved blocks on the grip and the handguard, with short sleeves running
+  // back toward the camera. Without them the gun floats like a prop instead of being held.
+  const glove = new THREE.MeshStandardMaterial({ color: new THREE.Color('#2b333b'), roughness: 0.85, metalness: 0.05 });
+  const sleeve = new THREE.MeshStandardMaterial({ color: new THREE.Color('#3d474f'), roughness: 0.95 });
+  const handR = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.085, 0.1), glove);
+  const handL = new THREE.Mesh(new THREE.BoxGeometry(0.062, 0.075, 0.11), glove);
+  const armR = new THREE.Mesh(new THREE.BoxGeometry(0.075, 0.09, 0.2), sleeve);
+  const armL = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.085, 0.24), sleeve);
+  if (kind === 'pistol') {
+    handR.position.set(0.004, -0.085, 0.06);
+    armR.position.set(0.05, -0.15, 0.2);
+    armR.rotation.x = 0.4;
+    handL.position.set(-0.03, -0.075, 0.02);
+    armL.position.set(-0.09, -0.13, 0.16);
+    armL.rotation.x = 0.5;
+    armL.rotation.y = -0.45;
+  } else if (kind === 'smg') {
+    handR.position.set(0.004, -0.075, 0.085);
+    armR.position.set(0.045, -0.14, 0.22);
+    armR.rotation.x = 0.38;
+    handL.position.set(0, -0.01, -0.17);
+    armL.position.set(-0.055, -0.085, -0.02);
+    armL.rotation.x = 0.5;
+    armL.rotation.y = 0.3;
+  } else {
+    handR.position.set(0.03, -0.058, 0.06);
+    armR.position.set(0.075, -0.115, 0.2);
+    armR.rotation.x = 0.3;
+    handL.position.set(0, -0.004, -0.22);
+    armL.position.set(-0.06, -0.09, -0.05);
+    armL.rotation.x = 0.52;
+    armL.rotation.y = 0.34;
+  }
+  model.add(handR, handL, armR, armL);
+
   // Right-handed hold: low and right of the eye, so the barrel points down the camera axis.
-  model.position.set(0.17, -0.155, -0.42);
+  model.position.set(0.17, -0.126, -0.42);
   model.rotation.y = 0.045;
   return model;
 }
@@ -211,13 +263,13 @@ export function createWeaponRig(camera) {
     const swayX = Math.sin(time * 2.1) * 0.004;
     const swayY = Math.sin(time * 2.9) * 0.003;
     const bob = Math.min(1, speed / 5.3) * 0.012;
-    model.position.set(0.17 + swayX, -0.155 + swayY - bob * 0.4, -0.42 + state.kick * 0.6);
+    model.position.set(0.17 + swayX, -0.126 + swayY - bob * 0.4, -0.42 + state.kick * 0.6);
     model.rotation.x = state.kick * 1.9;
     model.rotation.z = swayX * 1.5;
     muzzle.visible = state.flash > 0;
     muzzle.rotation.z = state.flash * 42;
     muzzle.scale.setScalar(state.flash > 0 ? 1 : 0.001);
-    muzzleLight.intensity = state.flash > 0 ? 12 : 0;
+    muzzleLight.intensity = state.flash > 0 ? 6 : 0;
   }
 
   return { models, show, pose, muzzle, muzzleLight };

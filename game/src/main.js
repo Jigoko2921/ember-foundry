@@ -343,13 +343,6 @@ function applyShot(shooter, def, spread) {
   return killed ? 3 : 2;
 }
 
-// A muzzle flash that actually lights the world: one point light parented to the camera,
-// driven by a timestamp so it decays with time and not with frame rate.
-const muzzleLight = new THREE.PointLight(new THREE.Color('#ffc98a'), 0, 9, 2);
-muzzleLight.position.set(0.24, -0.14, -0.9);
-camera.add(muzzleLight);
-let muzzleAt = -9;
-
 function playerShoot() {
   if (!playerBody.alive || !weaponReady(playerWeapon)) return false;
   if (!takeRound(playerWeapon)) {
@@ -363,7 +356,6 @@ function playerShoot() {
   playerBody.pitch = Math.min(1.45, playerBody.pitch + def.recoilPitch);
   playerBody.yaw += (random() * 2 - 1) * def.recoilYaw;
   audio.shot(def.sound);
-  muzzleAt = elapsed;
   if (result >= 2) hud.hitMarker(result === 3);
   pushSound(playerBody.position.x, playerBody.position.z, 'ct', 44);
   return true;
@@ -673,7 +665,7 @@ const BUY_ITEMS = [
   { id: 'rifle', name: WEAPONS.rifle.name, sub: WEAPONS.rifle.blurb, price: WEAPONS.rifle.price, icon: ICON.rifle },
   { id: 'smg', name: WEAPONS.smg.name, sub: WEAPONS.smg.blurb, price: WEAPONS.smg.price, icon: ICON.smg },
   { id: 'grenade', name: GRENADE.name, sub: GRENADE.blurb, price: GRENADE.price, icon: ICON.he },
-  { id: 'flash', name: 'Flash Grenade', sub: 'Flash · blinds 2.5s · $200', price: 200, icon: ICON.flash },
+  { id: 'flash', name: 'Flash Grenade', sub: 'Flash · blinds for 2.5 s', price: 200, icon: ICON.flash },
   { id: 'smoke', name: 'Smoke Grenade', sub: 'Smoke · 14s cloud · breaks sight', price: 300, icon: ICON.smoke },
   { id: 'armor', name: 'Kevlar Vest', sub: 'Absorbs 45% of every hit', price: ARMOR_PRICE, icon: ICON.armor },
 ];
@@ -1113,7 +1105,6 @@ function render() {
   updateBombProp();
   dust.rotation.y = elapsed * 0.008;
   dust.position.y = Math.sin(elapsed * 0.18) * 0.08;
-  muzzleLight.intensity = Math.max(0, 1 - (elapsed - muzzleAt) / 0.07) * 4;
   if (blastAt > elapsed - 0.32) {
     const t = (elapsed - blastAt) / 0.32;
     blastMesh.visible = true;
@@ -1247,10 +1238,20 @@ function paintAndReady() {
 
 const SHOT_SETUP = {
   menu() {
-    placePlayer(9.4, 7.8, -0.16, -0.02);
-    placeBot(tBots[0], 13.2, -2.4, 2.5);
-    placeBot(tBots[1], 15.6, -5.4, 2.2);
-    placeBot(ctBots[0], 9.4, -6.2, 3.2);
+    placePlayer(11.2, 5.6, 0.18, -0.01);
+    placeBot(tBots[0], 12.8, -2.2, 2.9);
+    placeBot(tBots[1], 14.6, -4.6, 2.5);
+    placeBot(ctBots[0], 10.6, 1.4, 0.35);
+    placeBot(tBots[2], 8.6, -5.2, 0.2);
+    spawnSmoke(17.2, 0.2, -3.4);
+    smokes[smokes.length - 1].born = elapsed - 5;
+    // A cover frame has no viewmodel: the gun belongs to play, not to the briefing.
+    rig.show('none');
+    // Cover lighting: menus light their hero shot. One warm fill behind the camera so the
+    // soldiers and the site read at a glance, without touching the in-game exposure.
+    const coverFill = new THREE.PointLight(new THREE.Color('#ffd2a6'), 34, 28, 2);
+    coverFill.position.set(9.2, 6.4, 4.2);
+    scene.add(coverFill);
     hud.showOverlay('start');
   },
   fight() {
@@ -1266,7 +1267,6 @@ const SHOT_SETUP = {
     inventory.rifle = createWeaponState(WEAPONS.rifle);
     inventory.rifle.mag = 17;
     inventory.rifle.flash = 0.05;
-    muzzleAt = elapsed - 0.01;
     playerWeapon = inventory.rifle;
     rig.show('rifle');
     grenades = 1;

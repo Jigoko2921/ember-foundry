@@ -437,6 +437,24 @@ export function createWorld(scene) {
   wall(2.4, 0.8, -12.5, 16.4, 1.0, 'surface');
 
   // --- dressing: pipes, lamp housings, chimney stacks -------------------
+  // Yard lamps: four practicals on posts. They give the night map a readable floor, and
+  // they are the difference between "dark" and "lit by something".
+  for (const [lx, lz] of [[0.0, 9.5], [0.0, -9.5], [17.6, 1.0], [-17.6, 1.0]]) {
+    const post = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.09, 4.6, 8), materials.hairline);
+    post.position.set(lx, 2.3, lz);
+    post.castShadow = true;
+    group.add(post);
+    const head = new THREE.Mesh(new THREE.BoxGeometry(0.62, 0.14, 0.36), materials.hairline);
+    head.position.set(lx, 4.62, lz);
+    group.add(head);
+    const panel = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.04, 0.26), materials.accent);
+    panel.position.set(lx, 4.53, lz);
+    group.add(panel);
+    const lamp = new THREE.PointLight(new THREE.Color('#ffc07a'), 11, 17, 2);
+    lamp.position.set(lx, 4.4, lz);
+    group.add(lamp);
+  }
+
   for (const z of [8.4, 5.2, 1.0]) {
     const pipe = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.13, 3.2, 8), materials.muted);
     pipe.rotation.z = Math.PI / 2;

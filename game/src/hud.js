@@ -41,6 +41,7 @@ export function createHud() {
     actionBar: $('action-bar'),
     flash: $('flash'),
     blind: $('blind'),
+    hud: $('hud'),
     radar: $('radar'),
     radarLabel: $('radar-label'),
     radio: $('radio'),
@@ -228,10 +229,12 @@ export function createHud() {
       el.play.textContent = 'Play again';
     }
     el.overlay.hidden = false;
+    if (el.hud) el.hud.style.opacity = '0';
   }
 
   function hideOverlay() {
     el.overlay.hidden = true;
+    if (el.hud) el.hud.style.opacity = '1';
   }
 
   function openBuy(items, money, note) {

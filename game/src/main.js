@@ -1001,10 +1001,65 @@ const bombLight = new THREE.PointLight(new THREE.Color(PALETTE.accent), 0, 5, 2)
 bombLight.position.y = 0.4;
 bombProp.add(bombLight);
 
+// --- air ---------------------------------------------------------------------
+// Dust in the light and a low sun on the horizon. Both are one draw call, neither casts a
+// shadow: they exist so a still frame has depth and the sky has a direction.
+let dustSeed = 0x51f3a7;
+const dustRandom = () => {
+  dustSeed = (Math.imul(dustSeed, 1664525) + 1013904223) >>> 0;
+  return dustSeed / 4294967296;
+};
+const DUST_COUNT = 280;
+const dust = (() => {
+  const positions = new Float32Array(DUST_COUNT * 3);
+  for (let i = 0; i < DUST_COUNT; i += 1) {
+    positions[i * 3] = (dustRandom() - 0.5) * 42;
+    positions[i * 3 + 1] = dustRandom() * 7 + 0.4;
+    positions[i * 3 + 2] = (dustRandom() - 0.5) * 42;
+  }
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  const points = new THREE.Points(geometry, new THREE.PointsMaterial({
+    color: new THREE.Color('#ffd9b0'),
+    size: 0.055,
+    transparent: true,
+    opacity: 0.55,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+    sizeAttenuation: true,
+  }));
+  scene.add(points);
+  return points;
+})();
+
+// The sun sprite is decorative: no handle is kept.
+(() => {
+  const c = document.createElement('canvas');
+  c.width = c.height = 256;
+  const g = c.getContext('2d');
+  const grad = g.createRadialGradient(128, 128, 2, 128, 128, 126);
+  grad.addColorStop(0, 'rgba(255,244,225,1)');
+  grad.addColorStop(0.18, 'rgba(255,206,150,0.85)');
+  grad.addColorStop(0.45, 'rgba(255,150,90,0.28)');
+  grad.addColorStop(1, 'rgba(255,120,60,0)');
+  g.fillStyle = grad;
+  g.fillRect(0, 0, 256, 256);
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
+    map: tex, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, fog: false,
+  }));
+  sprite.position.set(108, 132, 84);
+  sprite.scale.setScalar(72);
+  scene.add(sprite);
+})();
+
 function render() {
   updateSparks();
   updateSmoke();
   updateBombProp();
+  dust.rotation.y = elapsed * 0.008;
+  dust.position.y = Math.sin(elapsed * 0.18) * 0.08;
   if (blastAt > elapsed - 0.32) {
     const t = (elapsed - blastAt) / 0.32;
     blastMesh.visible = true;

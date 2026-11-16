@@ -191,7 +191,7 @@ function createMaterials(textures) {
     wood: new THREE.MeshStandardMaterial({ color: new THREE.Color('#a8875f'), map: textures.wood, roughness: 0.86, metalness: 0.02 }),
     ink: new THREE.MeshStandardMaterial({ color: new THREE.Color(PALETTE.ink), roughness: 0.5, metalness: 0.1 }),
     muted: new THREE.MeshStandardMaterial({ color: new THREE.Color(PALETTE.muted), roughness: 0.7, metalness: 0.15 }),
-    accent: new THREE.MeshStandardMaterial({ color: new THREE.Color(PALETTE.accent), emissive: new THREE.Color(PALETTE.accent), emissiveIntensity: 0.5, roughness: 0.4, metalness: 0.2 }),
+    accent: new THREE.MeshStandardMaterial({ color: new THREE.Color(PALETTE.accent), emissive: new THREE.Color(PALETTE.accent), emissiveIntensity: 0.34, roughness: 0.4, metalness: 0.2 }),
     teal: new THREE.MeshStandardMaterial({ color: new THREE.Color(PALETTE.teal), emissive: new THREE.Color(PALETTE.teal), emissiveIntensity: 0.4, roughness: 0.4, metalness: 0.2 }),
     pad: new THREE.MeshStandardMaterial({ color: new THREE.Color('#8d8377'), map: textures.hazard, roughness: 0.8, metalness: 0.05 }),
   };
@@ -220,28 +220,33 @@ function siteDecal(site) {
   const canvas = document.createElement('canvas');
   canvas.width = canvas.height = 256;
   const ctx = canvas.getContext('2d');
-  ctx.strokeStyle = color;
-  ctx.lineWidth = 7;
+  // A pale ring with one thin accent ring: the site must read as a place, never as a
+  // saturated disc that swallows an orange body standing on it.
+  ctx.strokeStyle = 'rgba(242,235,222,0.85)';
+  ctx.lineWidth = 5;
   ctx.beginPath();
   ctx.arc(128, 128, 112, 0, Math.PI * 2);
   ctx.stroke();
-  ctx.lineWidth = 2;
+  ctx.strokeStyle = color;
+  ctx.globalAlpha = 0.85;
+  ctx.lineWidth = 3;
   ctx.beginPath();
-  ctx.arc(128, 128, 96, 0, Math.PI * 2);
+  ctx.arc(128, 128, 102, 0, Math.PI * 2);
   ctx.stroke();
-  ctx.fillStyle = color;
-  ctx.font = 'bold 104px "Arial Narrow", Arial, sans-serif';
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = '#f6efe3';
+  ctx.font = 'bold 106px "Arial Narrow", Arial, sans-serif';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.fillText(site.name, 128, 118);
-  ctx.globalAlpha = 0.75;
+  ctx.fillText(site.name, 128, 116);
+  ctx.fillStyle = 'rgba(246,239,227,0.8)';
   ctx.font = '600 15px Arial, sans-serif';
   ctx.fillText(site.label, 128, 186);
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
   const mesh = new THREE.Mesh(
     new THREE.PlaneGeometry(site.radius * 2, site.radius * 2),
-    new THREE.MeshBasicMaterial({ map: texture, transparent: true, opacity: 0.9, depthWrite: false }),
+    new THREE.MeshBasicMaterial({ map: texture, transparent: true, opacity: 0.92, depthWrite: false }),
   );
   mesh.rotation.x = -Math.PI / 2;
   mesh.position.set(site.x, 0.025, site.z);
@@ -256,6 +261,44 @@ export function createWorld(scene) {
   const materials = createMaterials(createTextures());
   const colliders = [];
   const shootables = [];
+
+  // Fake ambient occlusion: a vertical gradient that darkens the first metre of every
+  // wall. Without a post-processing pass this is what stops walls and crates from
+  // looking pasted onto the floor.
+  const aoTex = (() => {
+    const c = document.createElement('canvas');
+    c.width = 4;
+    c.height = 64;
+    const g = c.getContext('2d');
+    const grad = g.createLinearGradient(0, 64, 0, 0);
+    grad.addColorStop(0, 'rgba(0,0,0,0.55)');
+    grad.addColorStop(0.45, 'rgba(0,0,0,0.18)');
+    grad.addColorStop(1, 'rgba(0,0,0,0)');
+    g.fillStyle = grad;
+    g.fillRect(0, 0, 4, 64);
+    const t = new THREE.CanvasTexture(c);
+    t.colorSpace = THREE.SRGBColorSpace;
+    return t;
+  })();
+  const aoMat = new THREE.MeshBasicMaterial({
+    map: aoTex, transparent: true, depthWrite: false, opacity: 0.9, side: THREE.DoubleSide,
+  });
+
+  function baseAO(w, d, x, z) {
+    const along = w >= d;
+    for (const side of [-1, 1]) {
+      const plane = new THREE.Mesh(new THREE.PlaneGeometry(along ? w : d, 1.05), aoMat);
+      if (along) {
+        plane.position.set(x, 0.52, z + side * (d / 2 + 0.015));
+        plane.rotation.y = side > 0 ? 0 : Math.PI;
+      } else {
+        plane.position.set(x + side * (w / 2 + 0.015), 0.52, z);
+        plane.rotation.y = side > 0 ? Math.PI / 2 : -Math.PI / 2;
+      }
+      plane.renderOrder = 2;
+      group.add(plane);
+    }
+  }
 
   // A box is the map's only primitive: y defaults to resting on the floor, and every
   // box is a collider and a bullet surface unless it says otherwise.
@@ -275,7 +318,9 @@ export function createWorld(scene) {
   }
 
   function wall(w, d, x, z, height = WALL_HEIGHT, material = 'hairline') {
-    return box(w, height, d, x, z, material);
+    const mesh = box(w, height, d, x, z, material);
+    baseAO(w, d, x, z);
+    return mesh;
   }
 
   function crate(x, z, size, height = size, material = 'wood') {
@@ -449,28 +494,29 @@ export function createWorld(scene) {
   // --- light: warm key from the south-east, cold fill, ember pools on site ----
   // A cool sky over a warm key keeps flat boxes reading as separate planes instead of
   // one brown mass, which is the whole trick of a texture-less blockout.
-  scene.add(new THREE.AmbientLight(new THREE.Color('#b9a293'), 1.05));
-  scene.add(new THREE.HemisphereLight(new THREE.Color('#d8b596'), new THREE.Color('#3a342e'), 1.65));
+  scene.add(new THREE.AmbientLight(new THREE.Color('#93a7bd'), 0.95));
+  scene.add(new THREE.HemisphereLight(new THREE.Color('#8fa8c4'), new THREE.Color('#241f1b'), 1.45));
 
-  const key = new THREE.DirectionalLight(new THREE.Color('#ffc38a'), 2.9);
+  const key = new THREE.DirectionalLight(new THREE.Color('#ffd0a2'), 2.7);
   key.position.set(18, 24, 14);
   key.target.position.set(0, 0, 0);
   key.castShadow = true;
-  key.shadow.mapSize.set(1024, 1024);
+  key.shadow.mapSize.set(2048, 2048);
   key.shadow.camera.left = -26;
   key.shadow.camera.right = 26;
   key.shadow.camera.top = 26;
   key.shadow.camera.bottom = -26;
   key.shadow.camera.far = 80;
-  key.shadow.bias = -0.0009;
+  key.shadow.bias = -0.0006;
+  key.shadow.normalBias = 0.02;
   scene.add(key, key.target);
 
-  const fill = new THREE.DirectionalLight(new THREE.Color('#9fc0d4'), 1.15);
+  const fill = new THREE.DirectionalLight(new THREE.Color('#7fa6c8'), 1.05);
   fill.position.set(-16, 14, -18);
   scene.add(fill);
 
   for (const site of SITES) {
-    const lamp = new THREE.PointLight(new THREE.Color(site.name === 'A' ? PALETTE.accent : PALETTE.teal), 16, 15, 2);
+    const lamp = new THREE.PointLight(new THREE.Color(site.name === 'A' ? PALETTE.accent : PALETTE.teal), 9, 20, 2);
     lamp.position.set(site.x, 3.9, site.z);
     scene.add(lamp);
   }

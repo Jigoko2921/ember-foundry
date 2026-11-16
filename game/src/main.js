@@ -54,7 +54,7 @@ document.getElementById('game').appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(PALETTE.canvas);
-scene.fog = new THREE.Fog(new THREE.Color('#6b5a58'), 26, 92);
+scene.fog = new THREE.Fog(new THREE.Color('#26313f'), 24, 88);
 
 // A dusk dome instead of a flat clear colour: the horizon burns, the zenith cools, and
 // every silhouette in the yard gains a rim. One draw call, no texture, no light cost.
@@ -66,9 +66,9 @@ scene.fog = new THREE.Fog(new THREE.Color('#6b5a58'), 26, 92);
       depthWrite: false,
       fog: false,
       uniforms: {
-        zenith: { value: new THREE.Color('#16233b') },
-        haze: { value: new THREE.Color('#7c6370') },
-        ember: { value: new THREE.Color('#e8975a') },
+        zenith: { value: new THREE.Color('#0b1730') },
+        haze: { value: new THREE.Color('#33405c') },
+        ember: { value: new THREE.Color('#b9653c') },
       },
       vertexShader: 'varying vec3 vDir; void main() { vDir = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
       fragmentShader: [
@@ -343,6 +343,13 @@ function applyShot(shooter, def, spread) {
   return killed ? 3 : 2;
 }
 
+// A muzzle flash that actually lights the world: one point light parented to the camera,
+// driven by a timestamp so it decays with time and not with frame rate.
+const muzzleLight = new THREE.PointLight(new THREE.Color('#ffc98a'), 0, 9, 2);
+muzzleLight.position.set(0.24, -0.14, -0.9);
+camera.add(muzzleLight);
+let muzzleAt = -9;
+
 function playerShoot() {
   if (!playerBody.alive || !weaponReady(playerWeapon)) return false;
   if (!takeRound(playerWeapon)) {
@@ -356,6 +363,7 @@ function playerShoot() {
   playerBody.pitch = Math.min(1.45, playerBody.pitch + def.recoilPitch);
   playerBody.yaw += (random() * 2 - 1) * def.recoilYaw;
   audio.shot(def.sound);
+  muzzleAt = elapsed;
   if (result >= 2) hud.hitMarker(result === 3);
   pushSound(playerBody.position.x, playerBody.position.z, 'ct', 44);
   return true;
@@ -843,6 +851,41 @@ const ctx = {
   },
 };
 
+// --- contact shadows ---------------------------------------------------------
+const CONTACT_TEX = (() => {
+  const c = document.createElement('canvas');
+  c.width = c.height = 128;
+  const g = c.getContext('2d');
+  const grad = g.createRadialGradient(64, 64, 6, 64, 64, 62);
+  grad.addColorStop(0, 'rgba(0,0,0,0.85)');
+  grad.addColorStop(0.55, 'rgba(0,0,0,0.45)');
+  grad.addColorStop(1, 'rgba(0,0,0,0)');
+  g.fillStyle = grad;
+  g.fillRect(0, 0, 128, 128);
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+})();
+const CONTACT_GEO = new THREE.PlaneGeometry(1, 1);
+const contactShadows = new Map();
+
+function contactShadow(id) {
+  let mesh = contactShadows.get(id);
+  if (!mesh) {
+    mesh = new THREE.Mesh(CONTACT_GEO, new THREE.MeshBasicMaterial({
+      map: CONTACT_TEX,
+      transparent: true,
+      depthWrite: false,
+      opacity: 1,
+    }));
+    mesh.rotation.x = -Math.PI / 2;
+    mesh.renderOrder = 1;
+    scene.add(mesh);
+    contactShadows.set(id, mesh);
+  }
+  return mesh;
+}
+
 function syncRigs() {
   for (const body of bodies) {
     const rigged = rigs.get(body.id);
@@ -867,6 +910,16 @@ function syncRigs() {
     rigged.hitbox.group.position.copy(body.position);
     rigged.hitbox.group.rotation.y = body.yaw;
     rigged.hitbox.group.visible = body.alive;
+  }
+  // Contact shadows: one cheap sprite per body, pinned to the floor. Without them a
+  // soldier is a floating box, which is the fastest way to read as a greybox.
+  for (const body of bodies) {
+    const sh = contactShadow(body.id);
+    sh.visible = body.alive && body.id !== playerBody.id;
+    if (!sh.visible) continue;
+    sh.position.set(body.position.x, 0.04, body.position.z);
+    const s = body.crouching ? 1.35 : 1.75;
+    sh.scale.set(s, s, 1);
   }
 }
 
@@ -1060,6 +1113,7 @@ function render() {
   updateBombProp();
   dust.rotation.y = elapsed * 0.008;
   dust.position.y = Math.sin(elapsed * 0.18) * 0.08;
+  muzzleLight.intensity = Math.max(0, 1 - (elapsed - muzzleAt) / 0.07) * 4;
   if (blastAt > elapsed - 0.32) {
     const t = (elapsed - blastAt) / 0.32;
     blastMesh.visible = true;
@@ -1212,6 +1266,7 @@ const SHOT_SETUP = {
     inventory.rifle = createWeaponState(WEAPONS.rifle);
     inventory.rifle.mag = 17;
     inventory.rifle.flash = 0.05;
+    muzzleAt = elapsed - 0.01;
     playerWeapon = inventory.rifle;
     rig.show('rifle');
     grenades = 1;

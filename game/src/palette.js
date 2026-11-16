@@ -2,10 +2,10 @@
 // world.js tints every material from these values, so the mood lives here and not in
 // a hundred literal colours scattered through the map.
 export const PALETTE = {
-  canvas: '#0d1216',
-  floor: '#414c57',
-  surface: '#333e48',
-  hairline: '#4a5763',
+  canvas: '#0b1018',
+  floor: '#2b3540',
+  surface: '#28323c',
+  hairline: '#39454f',
   ink: '#ece6d8',
   muted: '#9dabb7',
   accent: '#ff7a2f',

@@ -89,10 +89,10 @@ function paint(size, draw) {
 // Near-grey maps that the material colour tints, so one canvas serves concrete, steel
 // and the floor without a second colour table.
 function createTextures() {
-  const concrete = paint(128, (ctx, s) => {
+  const concrete = paint(256, (ctx, s) => {
     ctx.fillStyle = '#c6c6c6';
     ctx.fillRect(0, 0, s, s);
-    for (let i = 0; i < 5200; i += 1) {
+    for (let i = 0; i < 18000; i += 1) {
       const v = 140 + Math.floor(noise() * 100);
       ctx.fillStyle = `rgba(${v},${v},${v},0.45)`;
       ctx.fillRect(noise() * s, noise() * s, 1 + noise() * 2, 1 + noise() * 2);
@@ -109,15 +109,15 @@ function createTextures() {
     }
   });
 
-  const steel = paint(128, (ctx, s) => {
+  const steel = paint(256, (ctx, s) => {
     ctx.fillStyle = '#c9ced3';
     ctx.fillRect(0, 0, s, s);
-    for (let i = 0; i < 90; i += 1) {
+    for (let i = 0; i < 210; i += 1) {
       const y = noise() * s;
       ctx.fillStyle = `rgba(${90 + noise() * 60},${95 + noise() * 60},${100 + noise() * 60},0.18)`;
       ctx.fillRect(0, y, s, 0.6 + noise() * 1.2);
     }
-    for (let i = 0; i < 40; i += 1) {
+    for (let i = 0; i < 110; i += 1) {
       ctx.fillStyle = 'rgba(70,76,82,0.35)';
       ctx.fillRect(noise() * s, noise() * s, 1.5, 1.5 + noise() * 6);
     }
@@ -130,10 +130,10 @@ function createTextures() {
   });
 
   // 2 m slabs: the border lands on the tile edge, so the yard reads at a glance.
-  const floor = paint(128, (ctx, s) => {
+  const floor = paint(256, (ctx, s) => {
     ctx.fillStyle = '#c2c2c2';
     ctx.fillRect(0, 0, s, s);
-    for (let i = 0; i < 4200; i += 1) {
+    for (let i = 0; i < 16000; i += 1) {
       const v = 150 + Math.floor(noise() * 80);
       ctx.fillStyle = `rgba(${v},${v},${v},0.35)`;
       ctx.fillRect(noise() * s, noise() * s, 1 + noise() * 2, 1 + noise() * 2);
@@ -143,7 +143,7 @@ function createTextures() {
     ctx.strokeRect(1.5, 1.5, s - 3, s - 3);
   });
 
-  const hazard = paint(128, (ctx, s) => {
+  const hazard = paint(256, (ctx, s) => {
     ctx.fillStyle = '#d8d2c6';
     ctx.fillRect(0, 0, s, s);
     ctx.save();
@@ -154,7 +154,33 @@ function createTextures() {
     ctx.restore();
   });
 
-  return { concrete, steel, floor, hazard };
+  // Planked timber for the crates: the yard's only warm surface, and the thing that stops
+  // every box in the map reading as the same grey concrete.
+  const wood = paint(256, (ctx, s) => {
+    const planks = 4;
+    const ph = s / planks;
+    for (let p = 0; p < planks; p += 1) {
+      const base = 176 + Math.floor(noise() * 34);
+      ctx.fillStyle = `rgb(${base},${base - 26},${base - 58})`;
+      ctx.fillRect(0, p * ph, s, ph);
+      for (let i = 0; i < 26; i += 1) {
+        const y = p * ph + noise() * ph;
+        ctx.strokeStyle = `rgba(86,62,40,${0.06 + noise() * 0.13})`;
+        ctx.lineWidth = 0.8 + noise() * 1.5;
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.bezierCurveTo(s * 0.33, y + (noise() - 0.5) * 7, s * 0.66, y + (noise() - 0.5) * 7, s, y);
+        ctx.stroke();
+      }
+      ctx.fillStyle = 'rgba(54,40,28,0.55)';
+      ctx.fillRect(0, p * ph + ph - 2, s, 2);
+    }
+    ctx.strokeStyle = 'rgba(60,44,30,0.45)';
+    ctx.lineWidth = 3;
+    ctx.strokeRect(1.5, 1.5, s - 3, s - 3);
+  });
+
+  return { concrete, steel, floor, hazard, wood };
 }
 
 function createMaterials(textures) {
@@ -162,6 +188,7 @@ function createMaterials(textures) {
     floor: new THREE.MeshStandardMaterial({ color: new THREE.Color(PALETTE.floor), map: textures.floor, roughness: 0.95, metalness: 0.04 }),
     surface: new THREE.MeshStandardMaterial({ color: new THREE.Color(PALETTE.surface), map: textures.concrete, roughness: 0.9, metalness: 0.06 }),
     hairline: new THREE.MeshStandardMaterial({ color: new THREE.Color(PALETTE.hairline), map: textures.steel, roughness: 0.55, metalness: 0.3 }),
+    wood: new THREE.MeshStandardMaterial({ color: new THREE.Color('#a8875f'), map: textures.wood, roughness: 0.86, metalness: 0.02 }),
     ink: new THREE.MeshStandardMaterial({ color: new THREE.Color(PALETTE.ink), roughness: 0.5, metalness: 0.1 }),
     muted: new THREE.MeshStandardMaterial({ color: new THREE.Color(PALETTE.muted), roughness: 0.7, metalness: 0.15 }),
     accent: new THREE.MeshStandardMaterial({ color: new THREE.Color(PALETTE.accent), emissive: new THREE.Color(PALETTE.accent), emissiveIntensity: 0.5, roughness: 0.4, metalness: 0.2 }),
@@ -251,7 +278,7 @@ export function createWorld(scene) {
     return box(w, height, d, x, z, material);
   }
 
-  function crate(x, z, size, height = size, material = 'surface') {
+  function crate(x, z, size, height = size, material = 'wood') {
     return box(size, height, size, x, z, material, { tile: 1.4 });
   }
 
@@ -422,10 +449,10 @@ export function createWorld(scene) {
   // --- light: warm key from the south-east, cold fill, ember pools on site ----
   // A cool sky over a warm key keeps flat boxes reading as separate planes instead of
   // one brown mass, which is the whole trick of a texture-less blockout.
-  scene.add(new THREE.AmbientLight(new THREE.Color('#b9a293'), 0.75));
-  scene.add(new THREE.HemisphereLight(new THREE.Color('#d8b596'), new THREE.Color('#2a2622'), 1.35));
+  scene.add(new THREE.AmbientLight(new THREE.Color('#b9a293'), 1.05));
+  scene.add(new THREE.HemisphereLight(new THREE.Color('#d8b596'), new THREE.Color('#3a342e'), 1.65));
 
-  const key = new THREE.DirectionalLight(new THREE.Color('#ffc38a'), 3.6);
+  const key = new THREE.DirectionalLight(new THREE.Color('#ffc38a'), 2.9);
   key.position.set(18, 24, 14);
   key.target.position.set(0, 0, 0);
   key.castShadow = true;
@@ -438,12 +465,12 @@ export function createWorld(scene) {
   key.shadow.bias = -0.0009;
   scene.add(key, key.target);
 
-  const fill = new THREE.DirectionalLight(new THREE.Color('#9fc0d4'), 0.7);
+  const fill = new THREE.DirectionalLight(new THREE.Color('#9fc0d4'), 1.15);
   fill.position.set(-16, 14, -18);
   scene.add(fill);
 
   for (const site of SITES) {
-    const lamp = new THREE.PointLight(new THREE.Color(site.name === 'A' ? PALETTE.accent : PALETTE.teal), 30, 17, 2);
+    const lamp = new THREE.PointLight(new THREE.Color(site.name === 'A' ? PALETTE.accent : PALETTE.teal), 16, 15, 2);
     lamp.position.set(site.x, 3.9, site.z);
     scene.add(lamp);
   }

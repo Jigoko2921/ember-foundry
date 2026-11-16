@@ -40,6 +40,7 @@ export function createHud() {
     actionLabel: $('action-label'),
     actionBar: $('action-bar'),
     flash: $('flash'),
+    blind: $('blind'),
     radar: $('radar'),
     radarLabel: $('radar-label'),
     radio: $('radio'),
@@ -53,6 +54,7 @@ export function createHud() {
   let bannerTimer = 0;
   let hitTimer = 0;
   let flashTimer = 0;
+  let blindTimer = 0;
   let feedRows = [];
   let buyHandler = null;
   let closeHandler = null;
@@ -199,6 +201,18 @@ export function createHud() {
     flashTimer = setTimeout(() => el.flash.classList.remove('on'), 260);
   }
 
+  // A flash: a white-out that fades, scaled by how close the canister landed.
+  function blind(power) {
+    if (!el.blind) return;
+    el.blind.style.opacity = String(Math.max(0, Math.min(0.96, power)));
+    el.blind.classList.add('on');
+    clearTimeout(blindTimer);
+    blindTimer = setTimeout(() => {
+      el.blind.classList.remove('on');
+      el.blind.style.opacity = '0';
+    }, 180 + power * 700);
+  }
+
   function showOverlay(mode) {
     if (mode === 'start') {
       el.overlayTitle.innerHTML = 'Ember<br><span>Foundry</span>';
@@ -226,7 +240,7 @@ export function createHud() {
       const button = document.createElement('button');
       button.type = 'button';
       button.className = `buy-item${item.price > money ? ' cant' : ''}`;
-      button.innerHTML = `<span><span class="nm">${item.name}</span>${item.sub ? `<span class="sub">${item.sub}</span>` : ''}</span><span class="price">$${item.price}</span>`;
+      button.innerHTML = `${item.icon ? `<span class="ic">${item.icon}</span>` : ''}<span class="txt"><span class="nm">${item.name}</span>${item.sub ? `<span class="sub">${item.sub}</span>` : ''}</span><span class="price">$${item.price}</span>`;
       button.addEventListener('click', () => { if (buyHandler) buyHandler(item.id); });
       el.buyGrid.appendChild(button);
     }
@@ -371,7 +385,7 @@ export function createHud() {
 
   // ---------- equipment ----------
   function setEquipment(state) {
-    const key = `${state.slot}|${state.primary}|${state.secondary}|${state.frag}|${state.smoke}|${state.kind}`;
+    const key = `${state.slot}|${state.primary}|${state.secondary}|${state.frag}|${state.smoke}|${state.flash}|${state.kind}`;
     if (key === last.equipKey) return;
     last.equipKey = key;
     el.equipment.textContent = '';
@@ -381,6 +395,7 @@ export function createHud() {
       { k: '3', name: 'KNIFE', on: state.slot === 3 },
       { k: '4', name: `FRAG ×${state.frag}`, on: state.kind === 'he' && state.frag > 0, dim: state.frag <= 0 },
       { k: '5', name: `SMOKE ×${state.smoke}`, on: state.kind === 'smoke' && state.smoke > 0, dim: state.smoke <= 0 },
+      { k: '6', name: `FLASH ×${state.flash}`, on: state.kind === 'flash' && state.flash > 0, dim: state.flash <= 0 },
     ];
     for (const s of slots) {
       const d = document.createElement('div');
@@ -421,7 +436,7 @@ export function createHud() {
 
   return {
     setVitals, setAmmo, setMoney, setClock, setRound, setScore,
-    killFeed, bombBanner, banner, hitMarker, flashDamage,
+    killFeed, bombBanner, banner, hitMarker, flashDamage, blind,
     setSpread, setAction,
     showOverlay, hideOverlay,
     openBuy, closeBuy, showBoard, hideBoard,

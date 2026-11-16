@@ -50,6 +50,10 @@
   }
   #flash.on { animation: hitFlash 260ms ease-out; }
   @keyframes hitFlash { from { opacity: 1; } to { opacity: 0; } }
+  #blind {
+    position: fixed; inset: 0; pointer-events: none; z-index: 9; background: #fff; opacity: 0;
+    transition: opacity 520ms ease-out;
+  }
 
   #hud { position: fixed; inset: 0; pointer-events: none; z-index: 6; }
 
@@ -354,6 +358,10 @@
     transition: border-color 120ms ease, background 120ms ease, transform 120ms ease;
   }
   .buy-item:hover { border-color: var(--accent); background: #ff7a2f10; transform: translateY(-2px); }
+  .buy-item .ic { flex: 0 0 26px; width: 26px; height: 26px; color: var(--muted); }
+  .buy-item .ic svg { width: 100%; height: 100%; fill: currentColor; opacity: .9; }
+  .buy-item:hover .ic { color: var(--accent); }
+  .buy-item .txt { flex: 1; min-width: 0; }
   .buy-item .nm { font-family: var(--display); font-size: 16px; letter-spacing: .08em; text-transform: uppercase; }
   .buy-item .sub { display: block; font-family: var(--ui); font-size: 10px; letter-spacing: .06em; color: var(--muted); text-transform: none; margin-top: 3px; }
   .buy-item .price { font-family: var(--mono); font-size: 14px; color: var(--teal); white-space: nowrap; }
@@ -387,6 +395,7 @@
 <div id="game"></div>
 <div id="vignette"></div>
 <div id="flash"></div>
+<div id="blind"></div>
 <div id="grain"></div>
 
 <div id="hud" aria-hidden="true">

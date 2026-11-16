@@ -49,7 +49,7 @@ renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.18;
+renderer.toneMappingExposure = 1.1;
 document.getElementById('game').appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
@@ -225,6 +225,7 @@ const inventory = { pistol: createWeaponState(WEAPONS.pistol), rifle: null, smg:
 let playerWeapon = inventory.pistol;
 let grenades = 0;
 let smokeCount = 0;
+let flashCount = 0;
 let grenadeKind = 'he';
 rig.show('pistol');
 
@@ -255,8 +256,8 @@ const input = createInput(renderer.domElement, {
     if (code === 'Digit2') selectWeapon('smg');
     if (code === 'Digit3') selectWeapon('pistol');
     if (code === 'Digit4') {
-      grenadeKind = grenadeKind === 'he' ? 'smoke' : 'he';
-      hud.radio(grenadeKind === 'smoke' ? 'Utility ready: smoke' : 'Utility ready: frag', null);
+      grenadeKind = grenadeKind === 'he' ? 'smoke' : grenadeKind === 'smoke' ? 'flash' : 'he';
+      hud.radio(`Utility ready: ${grenadeKind === 'he' ? 'frag' : grenadeKind}`, null);
     }
     if (code === 'Tab') hud.showBoard(scoreRows());
   },
@@ -443,17 +444,22 @@ function throwGrenade() {
   if (shotMode || !playerBody.alive || buyOpen) return;
   if (match.state.phase !== PHASE.LIVE) return;
   let kind = grenadeKind;
-  if (kind === 'he' && grenades <= 0 && smokeCount > 0) kind = 'smoke';
-  if (kind === 'smoke' && smokeCount <= 0 && grenades > 0) kind = 'he';
+  if (kind === 'he' && grenades <= 0) kind = smokeCount > 0 ? 'smoke' : flashCount > 0 ? 'flash' : 'he';
+  if (kind === 'smoke' && smokeCount <= 0) kind = grenades > 0 ? 'he' : flashCount > 0 ? 'flash' : 'smoke';
+  if (kind === 'flash' && flashCount <= 0) kind = grenades > 0 ? 'he' : smokeCount > 0 ? 'smoke' : 'flash';
   if (kind === 'he' && grenades <= 0) return;
   if (kind === 'smoke' && smokeCount <= 0) return;
+  if (kind === 'flash' && flashCount <= 0) return;
   if (kind === 'he') grenades -= 1;
-  else smokeCount -= 1;
+  else if (kind === 'smoke') smokeCount -= 1;
+  else flashCount -= 1;
   const direction = new THREE.Vector3();
   camera.getWorldDirection(direction);
   const mesh = grenadeMesh.clone();
   if (kind === 'smoke') {
     mesh.material = smokeShellMaterial;
+  } else if (kind === 'flash') {
+    mesh.material = flashShellMaterial;
   }
   mesh.position.copy(camera.position).addScaledVector(direction, 0.55);
   scene.add(mesh);
@@ -463,7 +469,7 @@ function throwGrenade() {
     vx: direction.x * 17,
     vy: direction.y * 17 + 3.4,
     vz: direction.z * 17,
-    fuse: kind === 'smoke' ? GRENADE.fuse * 0.75 : GRENADE.fuse,
+    fuse: kind === 'smoke' ? GRENADE.fuse * 0.75 : kind === 'flash' ? GRENADE.fuse * 0.85 : GRENADE.fuse,
   });
 }
 
@@ -515,6 +521,10 @@ function stepGrenades(dt) {
         spawnSmoke(x, y, z);
         audio.explode();
         pushSound(x, z, playerBody.team, 26);
+      } else if (grenade.kind === 'flash') {
+        const { x, y, z } = grenade.mesh.position;
+        scene.remove(grenade.mesh);
+        popFlash(x, y, z);
       } else {
         explodeGrenade(grenade);
       }
@@ -556,6 +566,29 @@ function smokeTexture() {
   return tex;
 }
 const SMOKE_TEX = smokeTexture();
+
+const flashShellMaterial = new THREE.MeshStandardMaterial({
+  color: new THREE.Color('#e9e5dd'),
+  emissive: new THREE.Color('#ffffff'),
+  emissiveIntensity: 0.55,
+  roughness: 0.35,
+  metalness: 0.25,
+});
+
+const FLASH_RADIUS = 10;
+
+// A flash does not damage: it takes the eyes away. The player gets a white-out scaled by
+// distance, a bot loses its firing and its push for a second or three.
+function popFlash(x, y, z) {
+  audio.explode();
+  pushSound(x, z, playerBody.team, 44);
+  const pd = Math.hypot(playerBody.position.x - x, playerBody.position.z - z);
+  if (pd < FLASH_RADIUS) hud.blind(Math.min(0.96, 1 - pd / FLASH_RADIUS + 0.15));
+  for (const bot of bots) {
+    const d = Math.hypot(bot.body.position.x - x, bot.body.position.z - z);
+    if (d < FLASH_RADIUS) bot.body.flashUntil = elapsed + 1.1 + (1 - d / FLASH_RADIUS) * 2.4;
+  }
+}
 
 function spawnSmoke(x, y, z) {
   const group = new THREE.Group();
@@ -619,12 +652,22 @@ function smokeBlocks(eye, dir, distance) {
 }
 
 // --- buy menu ----------------------------------------------------------------
+const ICON = {
+  rifle: '<svg viewBox="0 0 24 24"><path d="M2 10.6h11.1l2.6-1.9H22v2.7h-3.1l-2.2 2.2h-3.2l-1.6 3.4H9.1l1.3-3.4H7.4L6 16.1H3.8l1.5-3.7H2z"/></svg>',
+  smg: '<svg viewBox="0 0 24 24"><path d="M3.4 10.8h8.9l2.4-1.7h5.7v2.5h-3.2l-1.9 2.1h-2.8l-1.2 3.6H9.1l1-3.6H6.6l-1.1 3.6H3.4l1.3-4H3.4z"/></svg>',
+  he: '<svg viewBox="0 0 24 24"><circle cx="11" cy="14" r="5.2"/><rect x="9.7" y="5.2" width="2.6" height="3.4" rx=".6"/><rect x="14.4" y="6.6" width="4.2" height="1.6" rx=".6"/><rect x="15.6" y="8.2" width="1.6" height="2.2" rx=".5"/></svg>',
+  smoke: '<svg viewBox="0 0 24 24"><rect x="8.2" y="7.4" width="7.6" height="11.4" rx="2.4"/><rect x="10.4" y="3.8" width="3.2" height="3.2" rx=".7"/><rect x="9.4" y="10.6" width="5.2" height="1.4" rx=".6" opacity=".55"/><rect x="9.4" y="13.2" width="5.2" height="1.4" rx=".6" opacity=".55"/></svg>',
+  flash: '<svg viewBox="0 0 24 24"><path d="M12 2.6l1.9 5.1 5.2-1.8-1.9 5.1 5.1 2-5.1 1.9 1.8 5.2-5.1-1.9-1.9 5.1-1.9-5.1-5.1 1.9 1.8-5.2-5.1-1.9 5.1-2-1.9-5.1 5.2 1.8z"/></svg>',
+  armor: '<svg viewBox="0 0 24 24"><path d="M8.2 3.6L12 5.2l3.8-1.6 3.4 4-1.9 3.2v8.6H6.7v-8.6L4.8 7.6z"/></svg>',
+};
+
 const BUY_ITEMS = [
-  { id: 'rifle', name: WEAPONS.rifle.name, sub: WEAPONS.rifle.blurb, price: WEAPONS.rifle.price },
-  { id: 'smg', name: WEAPONS.smg.name, sub: WEAPONS.smg.blurb, price: WEAPONS.smg.price },
-  { id: 'grenade', name: GRENADE.name, sub: GRENADE.blurb, price: GRENADE.price },
-  { id: 'smoke', name: 'Smoke Grenade', sub: 'Smoke · 14s cloud · breaks sight', price: 300 },
-  { id: 'armor', name: 'Kevlar Vest', sub: 'Absorbs 45% of every hit', price: ARMOR_PRICE },
+  { id: 'rifle', name: WEAPONS.rifle.name, sub: WEAPONS.rifle.blurb, price: WEAPONS.rifle.price, icon: ICON.rifle },
+  { id: 'smg', name: WEAPONS.smg.name, sub: WEAPONS.smg.blurb, price: WEAPONS.smg.price, icon: ICON.smg },
+  { id: 'grenade', name: GRENADE.name, sub: GRENADE.blurb, price: GRENADE.price, icon: ICON.he },
+  { id: 'flash', name: 'Flash Grenade', sub: 'Flash · blinds 2.5s · $200', price: 200, icon: ICON.flash },
+  { id: 'smoke', name: 'Smoke Grenade', sub: 'Smoke · 14s cloud · breaks sight', price: 300, icon: ICON.smoke },
+  { id: 'armor', name: 'Kevlar Vest', sub: 'Absorbs 45% of every hit', price: ARMOR_PRICE, icon: ICON.armor },
 ];
 
 function toggleBuy() {
@@ -660,6 +703,9 @@ function buy(item) {
   } else if (item === 'smoke' && match.spend(id, 300)) {
     smokeCount += 1;
     grenadeKind = 'smoke';
+  } else if (item === 'flash' && match.spend(id, 200)) {
+    flashCount += 1;
+    grenadeKind = 'flash';
   } else if (item === 'armor' && match.spend(id, ARMOR_PRICE)) {
     playerBody.armor = 100;
   }
@@ -704,6 +750,7 @@ function respawnAll() {
   playerWeapon = inventory.pistol;
   grenades = 0;
   smokeCount = 0;
+  flashCount = 0;
   grenadeKind = 'he';
   rig.show('pistol');
 
@@ -877,8 +924,9 @@ function simulate(dt) {
     keys.clear();
     if (bot.body.alive && phase !== PHASE.BUY) {
       const intent = bot.think(dt, elapsed, ctx);
-      for (const key of intent.keys) keys.add(key);
-      botFires[i] = intent.fire;
+      const blinded = (bot.body.flashUntil || 0) > elapsed;
+      for (const key of intent.keys) if (!blinded || key !== 'KeyW') keys.add(key);
+      botFires[i] = intent.fire && !blinded;
       if (intent.wantReload) startReload(bot.weapon);
     } else {
       botFires[i] = false;
@@ -1012,6 +1060,7 @@ function pushHud(dt, force = false) {
     secondary: 'P9',
     frag: grenades,
     smoke: smokeCount,
+    flash: flashCount,
     kind: grenadeKind,
   });
   hud.drawRadar({
@@ -1112,6 +1161,7 @@ const SHOT_SETUP = {
     rig.show('rifle');
     grenades = 1;
     smokeCount = 2;
+    flashCount = 1;
     grenadeKind = 'smoke';
     placeBot(tBots[0], 12.0, -2.2, 2.9, 100);
     placeBot(tBots[1], 15.4, -6.0, 2.4, 62);
@@ -1145,7 +1195,9 @@ const SHOT_SETUP = {
     rig.show('rifle');
     grenades = 1;
     smokeCount = 1;
+    flashCount = 1;
     grenadeKind = 'he';
+    match.state.round = 8;
     placeBot(tBots[0], 15.0, -6.6, 2.4, 88);
     placeBot(ctBots[0], 12.85, -2.55, 0.84, 40);
     // The defusing bot kneels, so the pose matches the progress bar.

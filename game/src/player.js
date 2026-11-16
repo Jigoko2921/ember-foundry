@@ -1,20 +1,27 @@
-// A body in the yard: acceleration, friction, gravity, crouch and jump, resolved as a box
-// against the map's colliders one axis at a time. The same module drives the player and the
-// bots, so both obey one movement rule and the gunplay's "stop to aim" holds for everyone.
+// One body model for the player and the bots: acceleration, friction, gravity, jump,
+// crouch, and a box resolved against the map one axis at a time. The same module drives
+// both sides of the fight, so "stop moving to shoot straight" holds for everyone.
+//
+// Two details earn their keep: a StepUp lets a 0.4 m lip be walked over instead of
+// stopping the body dead, and a landing snaps to the highest surface underfoot rather
+// than to whichever collider happens to come first in the list.
 import * as THREE from 'three';
 
 export const RADIUS = 0.34;
 export const STAND_HEIGHT = 1.72;
 export const CROUCH_HEIGHT = 1.12;
-export const STAND_EYE = 1.58;
-export const CROUCH_EYE = 1.0;
-const WALK_SPEED = 5.4;
+export const STAND_EYE = 1.56;
+export const CROUCH_EYE = 0.98;
+
+const WALK_SPEED = 5.3;
 const CROUCH_SPEED = 2.3;
 const GROUND_ACCEL = 46;
-const AIR_ACCEL = 8;
-const FRICTION = 10;
+const AIR_ACCEL = 9;
+const FRICTION = 9;
 const GRAVITY = 20;
-const JUMP_SPEED = 6.1;
+const JUMP_SPEED = 6.0;
+const STEP_UP = 0.42;
+const ARMOR_ABSORB = 0.45;
 
 let nextId = 1;
 
@@ -22,6 +29,7 @@ export function createBody(colliders, spawn, team) {
   const body = {
     id: nextId++,
     team,
+    name: '',
     position: new THREE.Vector3(spawn.x, 0, spawn.z),
     velocity: new THREE.Vector3(),
     yaw: spawn.yaw ?? 0,
@@ -35,16 +43,52 @@ export function createBody(colliders, spawn, team) {
     alive: true,
     kills: 0,
     deaths: 0,
+    lastHitAt: -99,
+    lastHitX: 0,
+    lastHitZ: 0,
   };
 
   const probe = new THREE.Box3();
-  const wish = new THREE.Vector3();
 
-  function overlaps(x, y, z, height, lift) {
-    probe.min.set(x - RADIUS, y + lift, z - RADIUS);
-    probe.max.set(x + RADIUS, y + height - lift, z + RADIUS);
-    for (const collider of colliders) if (probe.intersectsBox(collider)) return collider;
+  function overlaps(x, y, z, height) {
+    probe.min.set(x - RADIUS, y + 0.02, z - RADIUS);
+    probe.max.set(x + RADIUS, y + height - 0.02, z + RADIUS);
+    for (let i = 0; i < colliders.length; i += 1) {
+      if (probe.intersectsBox(colliders[i])) return colliders[i];
+    }
     return null;
+  }
+
+  // The highest surface whose top is at or below `ceiling` under the body's footprint.
+  function topUnder(x, z, ceiling) {
+    let top = -Infinity;
+    for (let i = 0; i < colliders.length; i += 1) {
+      const c = colliders[i];
+      if (c.max.y > ceiling || c.max.y <= top) continue;
+      if (x + RADIUS <= c.min.x || x - RADIUS >= c.max.x) continue;
+      if (z + RADIUS <= c.min.z || z - RADIUS >= c.max.z) continue;
+      top = c.max.y;
+    }
+    return top;
+  }
+
+  // Move on one axis and step a low ledge if it is the only thing in the way.
+  function shift(dx, dz) {
+    const x = body.position.x + dx;
+    const z = body.position.z + dz;
+    if (!overlaps(x, body.position.y, z, body.height)) {
+      body.position.x = x;
+      body.position.z = z;
+      return true;
+    }
+    if (body.onGround) {
+      const top = topUnder(x, z, body.position.y + STEP_UP);
+      if (top > body.position.y + 0.02 && !overlaps(x, top, z, body.height)) {
+        body.position.set(x, top, z);
+        return true;
+      }
+    }
+    return false;
   }
 
   function look(dx, dy, sensitivity = 0.0022) {
@@ -60,11 +104,12 @@ export function createBody(colliders, spawn, team) {
   function step(dt, keys, speedScale = 1) {
     if (!body.alive) return;
 
-    const crouching = keys.has('ControlLeft') || keys.has('ControlRight') || keys.has('KeyC');
-    if (crouching && !body.crouching) {
+    const wantsCrouch = keys.has('ControlLeft') || keys.has('ControlRight') || keys.has('KeyC');
+    if (wantsCrouch && !body.crouching) {
       body.crouching = true;
       body.height = CROUCH_HEIGHT;
-    } else if (!crouching && body.crouching && !overlaps(body.position.x, body.position.y, body.position.z, STAND_HEIGHT, 0.02)) {
+    } else if (!wantsCrouch && body.crouching
+      && !overlaps(body.position.x, body.position.y, body.position.z, STAND_HEIGHT)) {
       body.crouching = false;
       body.height = STAND_HEIGHT;
     }
@@ -73,18 +118,24 @@ export function createBody(colliders, spawn, team) {
 
     const forward = (keys.has('KeyW') ? 1 : 0) - (keys.has('KeyS') ? 1 : 0);
     const strafe = (keys.has('KeyD') ? 1 : 0) - (keys.has('KeyA') ? 1 : 0);
-    wish.set(0, 0, 0);
-    if (forward || strafe) {
+    let wishX = 0;
+    let wishZ = 0;
+    if (forward !== 0 || strafe !== 0) {
       const sin = Math.sin(body.yaw);
       const cos = Math.cos(body.yaw);
-      wish.set(-sin * forward + cos * strafe, 0, -cos * forward - sin * strafe).normalize();
+      wishX = -sin * forward + cos * strafe;
+      wishZ = -cos * forward - sin * strafe;
+      const len = Math.hypot(wishX, wishZ);
+      wishX /= len;
+      wishZ /= len;
     }
 
     const speed = (body.crouching ? CROUCH_SPEED : WALK_SPEED) * speedScale;
-    const blend = Math.min(1, (body.onGround ? GROUND_ACCEL : AIR_ACCEL) * dt / Math.max(0.1, speed));
-    body.velocity.x += (wish.x * speed - body.velocity.x) * blend;
-    body.velocity.z += (wish.z * speed - body.velocity.z) * blend;
-    if (body.onGround && !wish.lengthSq()) {
+    const accel = body.onGround ? GROUND_ACCEL : AIR_ACCEL;
+    const blend = Math.min(1, accel * dt / Math.max(0.1, speed));
+    body.velocity.x += (wishX * speed - body.velocity.x) * blend;
+    body.velocity.z += (wishZ * speed - body.velocity.z) * blend;
+    if (body.onGround && wishX === 0 && wishZ === 0) {
       const damp = Math.max(0, 1 - FRICTION * dt);
       body.velocity.x *= damp;
       body.velocity.z *= damp;
@@ -94,39 +145,43 @@ export function createBody(colliders, spawn, team) {
       body.velocity.y = JUMP_SPEED;
       body.onGround = false;
     }
-    body.velocity.y -= GRAVITY * dt;
+    body.velocity.y = Math.max(-30, body.velocity.y - GRAVITY * dt);
 
-    const nextX = body.position.x + body.velocity.x * dt;
-    if (!overlaps(nextX, body.position.y, body.position.z, body.height, 0.04)) body.position.x = nextX;
-    else body.velocity.x = 0;
-    const nextZ = body.position.z + body.velocity.z * dt;
-    if (!overlaps(body.position.x, body.position.y, nextZ, body.height, 0.04)) body.position.z = nextZ;
-    else body.velocity.z = 0;
+    if (!shift(body.velocity.x * dt, 0)) body.velocity.x = 0;
+    if (!shift(0, body.velocity.z * dt)) body.velocity.z = 0;
 
     body.position.y += body.velocity.y * dt;
-    body.onGround = false;
-    const hit = overlaps(body.position.x, body.position.y, body.position.z, body.height, 0);
-    if (hit && body.velocity.y <= 0) {
-      body.position.y = hit.max.y;
-      body.velocity.y = 0;
-      body.onGround = true;
-    } else if (hit) {
-      body.position.y = hit.min.y - body.height;
-      body.velocity.y = 0;
-    }
-    if (body.position.y < 0) {
+    if (body.position.y <= 0) {
       body.position.y = 0;
       body.velocity.y = 0;
       body.onGround = true;
     }
-    body.velocity.y = Math.max(-30, body.velocity.y);
+    const hit = overlaps(body.position.x, body.position.y, body.position.z, body.height);
+    if (hit) {
+      if (body.velocity.y <= 0) {
+        body.position.y = topUnder(body.position.x, body.position.z, body.position.y + 0.4);
+        body.velocity.y = 0;
+        body.onGround = true;
+      } else {
+        body.position.y = hit.min.y - body.height;
+        body.velocity.y = 0;
+      }
+    }
   }
 
+  // Armour eats part of every hit, so a vest roughly doubles the shots a body survives.
   function damage(amount) {
     if (!body.alive) return false;
-    body.health -= amount;
+    let dealt = amount;
+    if (body.armor > 0) {
+      const absorbed = Math.min(body.armor, dealt * ARMOR_ABSORB);
+      body.armor -= absorbed;
+      dealt -= absorbed;
+    }
+    body.health -= dealt;
     if (body.health <= 0) {
       body.health = 0;
+      body.armor = 0;
       body.alive = false;
       body.deaths += 1;
       return true;
@@ -140,13 +195,15 @@ export function createBody(colliders, spawn, team) {
     body.yaw = at.yaw ?? 0;
     body.pitch = 0;
     body.health = 100;
+    body.armor = 0;
     body.alive = true;
     body.crouching = false;
     body.height = STAND_HEIGHT;
     body.eye = STAND_EYE;
+    body.onGround = true;
   }
 
-  // The simulation's other modules act on the raw body, so the two verbs live on it too.
+  // Other modules act on the raw body, so the two verbs live on it too.
   body.hurt = damage;
   body.place = respawn;
 

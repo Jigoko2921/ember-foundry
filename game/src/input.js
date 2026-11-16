@@ -1,19 +1,27 @@
-// Keyboard and mouse, pointer lock, and the one-shot actions the HUD needs to hear about:
-// buy menu, weapon slots, grenade, use (plant or defuse), scoreboard.
+// Keyboard, mouse and pointer lock. Gameplay reads `state.keys` and `state.firing`; the
+// one-shot verbs (buy, grenade, weapon slots, scoreboard) go out through handlers.onKey,
+// so main.js owns what a key means and this module only owns how keys arrive.
 export function createInput(canvas, handlers = {}) {
   const keys = new Set();
   const state = { keys, locked: false, firing: false, lookX: 0, lookY: 0 };
 
-  function setKey(event, down) {
-    if (down) keys.add(event.code);
-    else keys.delete(event.code);
+  function press(event, down) {
+    if (down) {
+      if (event.repeat) return;
+      keys.add(event.code);
+    } else {
+      keys.delete(event.code);
+    }
     if (event.code === 'Space' || event.code === 'Tab') event.preventDefault();
     if (down && handlers.onKey) handlers.onKey(event.code);
   }
 
-  window.addEventListener('keydown', (event) => setKey(event, true));
-  window.addEventListener('keyup', (event) => setKey(event, false));
-  window.addEventListener('blur', () => keys.clear());
+  window.addEventListener('keydown', (event) => press(event, true));
+  window.addEventListener('keyup', (event) => press(event, false));
+  window.addEventListener('blur', () => {
+    keys.clear();
+    state.firing = false;
+  });
   window.addEventListener('mousemove', (event) => {
     if (!state.locked) return;
     state.lookX += event.movementX;
@@ -40,7 +48,16 @@ export function createInput(canvas, handlers = {}) {
   return {
     state,
     requestLock() {
-      canvas.requestPointerLock();
+      if (document.pointerLockElement === canvas) return;
+      try {
+        const request = canvas.requestPointerLock();
+        // Chrome returns a promise and rejects when the gesture is not trusted (headless,
+        // or a click that arrived while the browser was still settling). Swallow it: losing
+        // the mouse is not a reason to throw away the round.
+        if (request && typeof request.catch === 'function') request.catch(() => {});
+      } catch {
+        /* pointer lock unavailable: the game still runs on the keyboard */
+      }
     },
     releaseLock() {
       if (document.pointerLockElement) document.exitPointerLock();

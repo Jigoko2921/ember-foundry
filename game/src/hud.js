@@ -1,5 +1,6 @@
-// The DOM HUD: vitals, ammo, money, clock, score, kill feed, the round banner, the buy
-// menu and the scoreboard. It never touches the simulation; main.js pushes numbers in.
+// The DOM HUD: vitals, ammo, money, clock, score, kill feed, round banner, buy menu and
+// scoreboard. It never touches the simulation — main.js pushes plain numbers in and the
+// HUD only writes what actually changed, so a 60 Hz loop costs a handful of comparisons.
 const $ = (id) => document.getElementById(id);
 
 export function createHud() {
@@ -35,15 +36,24 @@ export function createHud() {
     buyClose: $('buy-close'),
     board: $('board'),
     boardBody: $('board-body'),
+    action: $('action'),
+    actionLabel: $('action-label'),
+    actionBar: $('action-bar'),
+    flash: $('flash'),
   };
 
-  let last = {};
-  let hitTimer = 0;
+  const last = {};
   let bannerTimer = 0;
+  let hitTimer = 0;
+  let flashTimer = 0;
   let feedRows = [];
   let buyHandler = null;
   let closeHandler = null;
   let playHandler = null;
+
+  // Screenshot mode freezes every transient: a banner that times out before the capture
+  // is a banner the image never shows.
+  const still = () => document.body.classList.contains('shot-mode');
 
   el.buyClose.addEventListener('click', () => { if (closeHandler) closeHandler(); });
   el.play.addEventListener('click', () => { if (playHandler) playHandler(); });
@@ -51,12 +61,12 @@ export function createHud() {
   function setVitals(health, armor) {
     if (health !== last.health) {
       last.health = health;
-      const pct = Math.max(0, Math.min(100, health));
-      el.health.textContent = String(Math.max(0, Math.round(health)));
-      el.health.classList.toggle('low', health <= 30);
-      el.healthBar.style.width = `${pct}%`;
-      el.healthBar.classList.toggle('low', health <= 30);
-      el.vignette.classList.toggle('hurt', health <= 30);
+      const value = Math.max(0, Math.round(health));
+      el.health.textContent = String(value);
+      el.health.classList.toggle('low', value <= 30);
+      el.healthBar.style.width = `${Math.max(0, Math.min(100, value))}%`;
+      el.healthBar.classList.toggle('low', value <= 30);
+      el.vignette.classList.toggle('hurt', value > 0 && value <= 30);
     }
     if (armor !== last.armor) {
       last.armor = armor;
@@ -88,7 +98,7 @@ export function createHud() {
     last.phase = phase;
     el.clock.textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
     el.clock.classList.toggle('urgent', phase === 'live' && s <= 10);
-    el.clock.style.color = phase === 'buy' ? 'var(--muted)' : '';
+    el.clock.classList.toggle('quiet', phase === 'buy');
   }
 
   function setRound(n) {
@@ -98,8 +108,36 @@ export function createHud() {
   }
 
   function setScore(ct, t) {
-    if (ct !== last.ct) { last.ct = ct; el.scoreCT.textContent = String(ct); }
-    if (t !== last.t) { last.t = t; el.scoreT.textContent = String(t); }
+    if (ct !== last.ct) {
+      last.ct = ct;
+      el.scoreCT.firstChild.textContent = String(ct);
+    }
+    if (t !== last.t) {
+      last.t = t;
+      el.scoreT.firstChild.textContent = String(t);
+    }
+  }
+
+  // Crosshair gap in pixels from the weapon's real cone, so the reticle never lies.
+  function setSpread(pixels) {
+    const gap = Math.max(2, Math.min(18, pixels));
+    if (Math.abs((last.gap ?? 0) - gap) < 0.4) return;
+    last.gap = gap;
+    el.crosshair.style.setProperty('--gap', `${gap.toFixed(1)}px`);
+  }
+
+  function setAction(label, progress) {
+    if (!label || progress <= 0) {
+      if (last.action !== 0) {
+        last.action = 0;
+        el.action.classList.remove('on');
+      }
+      return;
+    }
+    last.action = progress;
+    el.action.classList.add('on');
+    el.actionLabel.textContent = label;
+    el.actionBar.style.width = `${Math.min(100, progress * 100)}%`;
   }
 
   function killFeed(html) {
@@ -109,59 +147,76 @@ export function createHud() {
     el.killfeed.appendChild(row);
     feedRows.push(row);
     while (feedRows.length > 5) feedRows.shift().remove();
-    setTimeout(() => { row.remove(); feedRows = feedRows.filter((r) => r !== row); }, 5000);
+    if (still()) return;
+    setTimeout(() => {
+      row.remove();
+      feedRows = feedRows.filter((r) => r !== row);
+    }, 5200);
   }
 
-  function bombBanner(on) {
+  function bombBanner(on, site) {
     el.bombBanner.classList.toggle('on', !!on);
+    if (on) el.bombBanner.textContent = site ? `BOMB PLANTED · SITE ${site}` : 'BOMB PLANTED';
   }
 
   function banner(big, small, team) {
     el.banner.classList.remove('ct', 't');
     if (team) el.banner.classList.add(team);
     el.bannerBig.textContent = big;
-    el.bannerSmall.textContent = small;
+    el.bannerSmall.textContent = small ?? '';
     el.banner.classList.add('on');
     clearTimeout(bannerTimer);
+    if (still()) return;
     bannerTimer = setTimeout(() => el.banner.classList.remove('on'), 2600);
   }
 
   function hitMarker(killed) {
+    el.hitmarker.classList.toggle('kill', !!killed);
     el.hitmarker.classList.add('on');
-    el.hitmarker.style.transform = killed ? 'translate(-50%, -50%) rotate(45deg) scale(1.3)' : 'translate(-50%, -50%) rotate(45deg)';
     el.crosshair.classList.add('hit');
     clearTimeout(hitTimer);
     hitTimer = setTimeout(() => {
       el.hitmarker.classList.remove('on');
-      el.hitmarker.style.transform = 'translate(-50%, -50%) rotate(45deg)';
       el.crosshair.classList.remove('hit');
-    }, 90);
+    }, 110);
+  }
+
+  function flashDamage() {
+    el.flash.classList.remove('on');
+    // Force a reflow so the animation restarts even on back-to-back hits.
+    void el.flash.offsetWidth;
+    el.flash.classList.add('on');
+    clearTimeout(flashTimer);
+    flashTimer = setTimeout(() => el.flash.classList.remove('on'), 260);
   }
 
   function showOverlay(mode) {
     if (mode === 'start') {
+      el.overlayTitle.innerHTML = 'Ember<br><span>Foundry</span>';
       el.overlayCopy.textContent = 'Two teams. Short rounds. One bomb. Buy at the bell, take a site, hold the angle — accuracy beats speed.';
       el.play.textContent = 'Deploy';
     } else if (mode === 'paused') {
       el.overlayTitle.textContent = 'Paused';
-      el.overlayCopy.textContent = 'The round is frozen. Click to resume.';
+      el.overlayCopy.textContent = 'The round is frozen. Click resume to take the mouse back.';
       el.play.textContent = 'Resume';
     } else if (mode === 'end') {
       el.overlayTitle.textContent = 'Match over';
-      el.overlayCopy.textContent = 'Refresh to play again.';
+      el.overlayCopy.textContent = `Final score ${last.ct ?? 0} — ${last.t ?? 0}. Refresh to play again.`;
       el.play.textContent = 'Play again';
     }
     el.overlay.hidden = false;
   }
 
-  function hideOverlay() { el.overlay.hidden = true; }
+  function hideOverlay() {
+    el.overlay.hidden = true;
+  }
 
   function openBuy(items, money, note) {
-    el.buyGrid.innerHTML = '';
+    el.buyGrid.textContent = '';
     for (const item of items) {
       const button = document.createElement('button');
       button.type = 'button';
-      button.className = 'buy-item' + (item.price > money ? ' cant' : '');
+      button.className = `buy-item${item.price > money ? ' cant' : ''}`;
       button.innerHTML = `<span><span class="nm">${item.name}</span>${item.sub ? `<span class="sub">${item.sub}</span>` : ''}</span><span class="price">$${item.price}</span>`;
       button.addEventListener('click', () => { if (buyHandler) buyHandler(item.id); });
       el.buyGrid.appendChild(button);
@@ -170,10 +225,12 @@ export function createHud() {
     el.buy.hidden = false;
   }
 
-  function closeBuy() { el.buy.hidden = true; }
+  function closeBuy() {
+    el.buy.hidden = true;
+  }
 
   function showBoard(rows) {
-    el.boardBody.innerHTML = '';
+    el.boardBody.textContent = '';
     for (const row of rows) {
       const tr = document.createElement('tr');
       if (!row.alive) tr.className = 'dead';
@@ -183,11 +240,14 @@ export function createHud() {
     el.board.hidden = false;
   }
 
-  function hideBoard() { el.board.hidden = true; }
+  function hideBoard() {
+    el.board.hidden = true;
+  }
 
   return {
     setVitals, setAmmo, setMoney, setClock, setRound, setScore,
-    killFeed, bombBanner, banner, hitMarker,
+    killFeed, bombBanner, banner, hitMarker, flashDamage,
+    setSpread, setAction,
     showOverlay, hideOverlay,
     openBuy, closeBuy, showBoard, hideBoard,
     onPlay(handler) { playHandler = handler; },

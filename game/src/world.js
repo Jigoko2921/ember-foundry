@@ -1,7 +1,10 @@
-// The map: Ember Foundry, an original two-site industrial yard built only from boxes,
-// ramps and slabs. Every box is a collider for bodies and a surface a bullet stops on.
-// The layout gives three lanes (Long A east, Mid centre, B Tunnel west), two bombsites,
-// and cover that rewards stopping to aim.
+// Ember Foundry's yard. One industrial courtyard, two bomb sites, three lanes and a
+// ring of connectors, built only from boxes and cylinders: every collider is an AABB the
+// body code resolves cheaply and every surface can stop a bullet.
+//
+// The layout is meant to be read in this order: shell, lanes, sites, cover, dressing,
+// light. Lane walls are 0.7 m thick, the perimeter 1 m, and every wall sits inside
+// ±22 m so the map agrees with MAP_HALF.
 import * as THREE from 'three';
 import { PALETTE } from './palette.js';
 
@@ -9,64 +12,229 @@ export const MAP_HALF = 22;
 export const WALL_HEIGHT = 5.2;
 
 export const SITES = [
-  { name: 'A', x: 13, z: -4, radius: 4.6, label: 'SITE A' },
-  { name: 'B', x: -13, z: 2, radius: 4.6, label: 'SITE B' },
+  { name: 'A', x: 12.0, z: -3.4, radius: 4.4, label: 'SITE A' },
+  { name: 'B', x: -12.4, z: 2.6, radius: 4.4, label: 'SITE B' },
 ];
 
+// Counter-Terrorists hold the south yard, Terrorists push from the north. Slot 0 is the
+// player's spawn: centre and furthest back, looking straight down the mid doors.
 export const SPAWNS = {
   ct: [
-    { x: -2.2, z: -18.4, yaw: 0 },
-    { x: 2.2, z: -18.4, yaw: 0 },
-    { x: 0, z: -19.4, yaw: 0 },
+    { x: 0, z: -18.6, yaw: Math.PI },
+    { x: -3.2, z: -18.1, yaw: Math.PI },
+    { x: 3.2, z: -18.1, yaw: Math.PI },
   ],
   t: [
-    { x: -2.4, z: 18.4, yaw: Math.PI },
-    { x: 2.4, z: 18.4, yaw: Math.PI },
-    { x: 0, z: 19.2, yaw: Math.PI },
+    { x: 0, z: 18.6, yaw: 0 },
+    { x: -3.2, z: 18.1, yaw: 0 },
+    { x: 3.2, z: 18.1, yaw: 0 },
   ],
 };
 
-// Waypoints the bots walk between. Each names its neighbours, so a route is a path in
-// this graph rather than a straight line through a wall.
+// The bots' nav graph. `next` is undirected in practice (every edge is listed from both
+// ends); `look` names the point a bot should face when it holds there, which is what
+// turns a waypoint into an angle rather than a corner to stand in.
 export const WAYPOINTS = [
-  { id: 't-spawn', x: 0, z: 17.5, next: ['t-west', 't-east', 'mid-south'] },
-  { id: 't-west', x: -9, z: 15.5, next: ['t-spawn', 'b-tunnel-south'] },
-  { id: 't-east', x: 9.5, z: 15.5, next: ['t-spawn', 'a-long-south'] },
-  { id: 'b-tunnel-south', x: -17.5, z: 12.5, next: ['t-west', 'b-tunnel-mid'] },
-  { id: 'b-tunnel-mid', x: -17.5, z: 5.5, next: ['b-tunnel-south', 'b-site'] },
-  { id: 'b-site', x: -13, z: 2, next: ['b-tunnel-mid', 'b-exit', 'mid-west'] },
-  { id: 'b-exit', x: -8, z: -1.5, next: ['b-site', 'mid-west'] },
-  { id: 'a-long-south', x: 17.5, z: 13.5, next: ['t-east', 'a-long-mid'] },
-  { id: 'a-long-mid', x: 17.5, z: 2.5, next: ['a-long-south', 'a-site'] },
-  { id: 'a-site', x: 13, z: -4, next: ['a-long-mid', 'a-short', 'mid-east'] },
-  { id: 'a-short', x: 6.5, z: -10.5, next: ['a-site', 'ct-mid'] },
-  { id: 'mid-south', x: 0, z: 13.5, next: ['t-spawn', 'mid-center'] },
-  { id: 'mid-center', x: 0, z: 3, next: ['mid-south', 'mid-east', 'mid-west', 'ct-mid'] },
-  { id: 'mid-east', x: 5.5, z: -3.5, next: ['mid-center', 'a-site'] },
-  { id: 'mid-west', x: -5.5, z: -2, next: ['mid-center', 'b-site', 'b-exit'] },
-  { id: 'ct-mid', x: 0, z: -11.5, next: ['mid-center', 'a-short', 'ct-spawn'] },
-  { id: 'ct-spawn', x: 0, z: -17.5, next: ['ct-mid'] },
+  { id: 't-spawn', x: 0, z: 17.6, next: ['t-west', 't-east', 'mid-north'] },
+  { id: 't-west', x: -8.5, z: 15.2, next: ['t-spawn', 'b-gate'] },
+  { id: 't-east', x: 8.5, z: 15.2, next: ['t-spawn', 'a-long-gate'] },
+
+  { id: 'mid-north', x: 0, z: 12.2, next: ['t-spawn', 'mid-center'] },
+  { id: 'mid-center', x: 0, z: 2.6, next: ['mid-north', 'mid-block-w', 'mid-block-e', 'a-window', 'b-window'], look: [0, 12] },
+  { id: 'mid-block-w', x: -3.6, z: -2.0, next: ['mid-center', 'mid-south', 'mid-west'] },
+  { id: 'mid-block-e', x: 3.6, z: -2.0, next: ['mid-center', 'mid-south'] },
+  { id: 'mid-south', x: 0, z: -9.2, next: ['mid-block-w', 'mid-block-e', 'mid-west', 'a-short', 'ct-door'], look: [0, 12] },
+  { id: 'mid-west', x: -5.0, z: -7.0, next: ['mid-south', 'b-exit'] },
+  { id: 'ct-door', x: 0, z: -14.2, next: ['mid-south', 'ct-spawn'] },
+  { id: 'ct-spawn', x: 0, z: -17.6, next: ['ct-door', 'ct-yard'] },
+  { id: 'ct-yard', x: -8.6, z: -15.2, next: ['ct-spawn', 'ct-west'] },
+  { id: 'ct-west', x: -9.5, z: -10.6, next: ['ct-yard', 'b-exit'] },
+
+  { id: 'b-gate', x: -18.4, z: 13.8, next: ['t-west', 'b-tunnel-north'] },
+  { id: 'b-tunnel-north', x: -18.4, z: 10.0, next: ['b-gate', 'b-tunnel-mouth'] },
+  { id: 'b-tunnel-mouth', x: -18.4, z: 4.8, next: ['b-tunnel-north', 'b-site'] },
+  { id: 'b-site', x: -12.4, z: 2.6, next: ['b-tunnel-mouth', 'b-window', 'b-exit'], look: [-18.4, 4.8] },
+  { id: 'b-window', x: -8.4, z: 4.0, next: ['b-site', 'mid-center'] },
+  { id: 'b-exit', x: -9.8, z: -6.9, next: ['b-site', 'mid-west', 'ct-west'], look: [-12.4, 2.6] },
+
+  { id: 'a-long-gate', x: 18.4, z: 14.0, next: ['t-east', 'a-long-north'] },
+  { id: 'a-long-north', x: 18.4, z: 10.5, next: ['a-long-gate', 'a-long-mouth'] },
+  { id: 'a-long-mouth', x: 18.4, z: 3.2, next: ['a-long-north', 'a-north'] },
+  { id: 'a-north', x: 14.6, z: 1.6, next: ['a-long-mouth', 'a-window', 'a-site'] },
+  { id: 'a-window', x: 8.4, z: 1.4, next: ['a-north', 'mid-center'] },
+  { id: 'a-site', x: 12.0, z: -3.4, next: ['a-north', 'a-short'], look: [18.4, 3.2] },
+  { id: 'a-short', x: 9.4, z: -9.2, next: ['a-site', 'mid-south'], look: [12.0, -3.4] },
 ];
+
+// A deterministic little generator, so the texture grain is the same in every render.
+let grain = 0x2f6e2b1;
+function noise() {
+  grain = (Math.imul(grain, 1664525) + 1013904223) >>> 0;
+  return grain / 4294967296;
+}
+
+function paint(size, draw) {
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  draw(canvas.getContext('2d'), size);
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.wrapS = THREE.RepeatWrapping;
+  texture.wrapT = THREE.RepeatWrapping;
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.anisotropy = 4;
+  return texture;
+}
+
+// Near-grey maps that the material colour tints, so one canvas serves concrete, steel
+// and the floor without a second colour table.
+function createTextures() {
+  const concrete = paint(128, (ctx, s) => {
+    ctx.fillStyle = '#c6c6c6';
+    ctx.fillRect(0, 0, s, s);
+    for (let i = 0; i < 5200; i += 1) {
+      const v = 140 + Math.floor(noise() * 100);
+      ctx.fillStyle = `rgba(${v},${v},${v},0.45)`;
+      ctx.fillRect(noise() * s, noise() * s, 1 + noise() * 2, 1 + noise() * 2);
+    }
+    for (let i = 0; i < 6; i += 1) {
+      const x = noise() * s;
+      const y = noise() * s;
+      const r = 10 + noise() * 26;
+      const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+      g.addColorStop(0, 'rgba(88,88,88,0.20)');
+      g.addColorStop(1, 'rgba(88,88,88,0)');
+      ctx.fillStyle = g;
+      ctx.fillRect(x - r, y - r, r * 2, r * 2);
+    }
+  });
+
+  const steel = paint(128, (ctx, s) => {
+    ctx.fillStyle = '#c9ced3';
+    ctx.fillRect(0, 0, s, s);
+    for (let i = 0; i < 90; i += 1) {
+      const y = noise() * s;
+      ctx.fillStyle = `rgba(${90 + noise() * 60},${95 + noise() * 60},${100 + noise() * 60},0.18)`;
+      ctx.fillRect(0, y, s, 0.6 + noise() * 1.2);
+    }
+    for (let i = 0; i < 40; i += 1) {
+      ctx.fillStyle = 'rgba(70,76,82,0.35)';
+      ctx.fillRect(noise() * s, noise() * s, 1.5, 1.5 + noise() * 6);
+    }
+    ctx.fillStyle = 'rgba(60,66,72,0.55)';
+    for (const [x, y] of [[10, 10], [s - 10, 10], [10, s - 10], [s - 10, s - 10]]) {
+      ctx.beginPath();
+      ctx.arc(x, y, 3, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  });
+
+  // 2 m slabs: the border lands on the tile edge, so the yard reads at a glance.
+  const floor = paint(128, (ctx, s) => {
+    ctx.fillStyle = '#c2c2c2';
+    ctx.fillRect(0, 0, s, s);
+    for (let i = 0; i < 4200; i += 1) {
+      const v = 150 + Math.floor(noise() * 80);
+      ctx.fillStyle = `rgba(${v},${v},${v},0.35)`;
+      ctx.fillRect(noise() * s, noise() * s, 1 + noise() * 2, 1 + noise() * 2);
+    }
+    ctx.strokeStyle = 'rgba(74,80,86,0.65)';
+    ctx.lineWidth = 3;
+    ctx.strokeRect(1.5, 1.5, s - 3, s - 3);
+  });
+
+  const hazard = paint(128, (ctx, s) => {
+    ctx.fillStyle = '#d8d2c6';
+    ctx.fillRect(0, 0, s, s);
+    ctx.save();
+    ctx.translate(s / 2, s / 2);
+    ctx.rotate(-Math.PI / 4);
+    ctx.fillStyle = '#3a3f44';
+    for (let x = -s * 1.5; x < s * 1.5; x += 34) ctx.fillRect(x, -s, 17, s * 2);
+    ctx.restore();
+  });
+
+  return { concrete, steel, floor, hazard };
+}
+
+function createMaterials(textures) {
+  return {
+    floor: new THREE.MeshStandardMaterial({ color: new THREE.Color(PALETTE.floor), map: textures.floor, roughness: 0.95, metalness: 0.04 }),
+    surface: new THREE.MeshStandardMaterial({ color: new THREE.Color(PALETTE.surface), map: textures.concrete, roughness: 0.9, metalness: 0.06 }),
+    hairline: new THREE.MeshStandardMaterial({ color: new THREE.Color(PALETTE.hairline), map: textures.steel, roughness: 0.55, metalness: 0.3 }),
+    ink: new THREE.MeshStandardMaterial({ color: new THREE.Color(PALETTE.ink), roughness: 0.5, metalness: 0.1 }),
+    muted: new THREE.MeshStandardMaterial({ color: new THREE.Color(PALETTE.muted), roughness: 0.7, metalness: 0.15 }),
+    accent: new THREE.MeshStandardMaterial({ color: new THREE.Color(PALETTE.accent), emissive: new THREE.Color(PALETTE.accent), emissiveIntensity: 0.5, roughness: 0.4, metalness: 0.2 }),
+    teal: new THREE.MeshStandardMaterial({ color: new THREE.Color(PALETTE.teal), emissive: new THREE.Color(PALETTE.teal), emissiveIntensity: 0.4, roughness: 0.4, metalness: 0.2 }),
+    pad: new THREE.MeshStandardMaterial({ color: new THREE.Color('#8d8377'), map: textures.hazard, roughness: 0.8, metalness: 0.05 }),
+  };
+}
+
+// BoxGeometry's UVs are 0..1 per face, so a 9 m wall and a 1 m crate share a texture at
+// wildly different scales. Scaling each face's UVs by its world size keeps texel density
+// constant with one shared material.
+function boxGeometry(w, h, d, tile) {
+  const geometry = new THREE.BoxGeometry(w, h, d);
+  const uv = geometry.attributes.uv;
+  const du = [d, d, w, w, w, w];
+  const dv = [h, h, d, d, h, h];
+  for (let face = 0; face < 6; face += 1) {
+    for (let v = 0; v < 4; v += 1) {
+      const i = face * 4 + v;
+      uv.setXY(i, (uv.getX(i) * du[face]) / tile, (uv.getY(i) * dv[face]) / tile);
+    }
+  }
+  uv.needsUpdate = true;
+  return geometry;
+}
+
+function siteDecal(site) {
+  const color = site.name === 'A' ? PALETTE.accent : PALETTE.teal;
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = 256;
+  const ctx = canvas.getContext('2d');
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 7;
+  ctx.beginPath();
+  ctx.arc(128, 128, 112, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.arc(128, 128, 96, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.fillStyle = color;
+  ctx.font = 'bold 104px "Arial Narrow", Arial, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(site.name, 128, 118);
+  ctx.globalAlpha = 0.75;
+  ctx.font = '600 15px Arial, sans-serif';
+  ctx.fillText(site.label, 128, 186);
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  const mesh = new THREE.Mesh(
+    new THREE.PlaneGeometry(site.radius * 2, site.radius * 2),
+    new THREE.MeshBasicMaterial({ map: texture, transparent: true, opacity: 0.9, depthWrite: false }),
+  );
+  mesh.rotation.x = -Math.PI / 2;
+  mesh.position.set(site.x, 0.025, site.z);
+  return mesh;
+}
 
 export function createWorld(scene) {
   const group = new THREE.Group();
+  group.name = 'ember-foundry';
   scene.add(group);
 
-  const materials = {};
-  for (const name of Object.keys(PALETTE)) {
-    materials[name] = new THREE.MeshStandardMaterial({
-      color: new THREE.Color(PALETTE[name]),
-      roughness: name === 'accent' || name === 'teal' ? 0.5 : 0.9,
-      metalness: name === 'hairline' ? 0.25 : 0.06,
-    });
-  }
-
+  const materials = createMaterials(createTextures());
   const colliders = [];
   const shootables = [];
 
-  function box(width, height, depth, x, y, z, material, opts = {}) {
-    const mesh = new THREE.Mesh(new THREE.BoxGeometry(width, height, depth), materials[material]);
-    mesh.position.set(x, y, z);
+  // A box is the map's only primitive: y defaults to resting on the floor, and every
+  // box is a collider and a bullet surface unless it says otherwise.
+  function box(w, h, d, x, z, material, opts = {}) {
+    const mesh = new THREE.Mesh(boxGeometry(w, h, d, opts.tile ?? 2), materials[material]);
+    mesh.position.set(x, opts.y ?? h / 2, z);
     if (opts.rotY) mesh.rotation.y = opts.rotY;
     mesh.castShadow = opts.castShadow !== false;
     mesh.receiveShadow = true;
@@ -75,127 +243,220 @@ export function createWorld(scene) {
       mesh.updateMatrixWorld(true);
       colliders.push(new THREE.Box3().setFromObject(mesh));
     }
-    if (opts.shootable !== false) shootables.push(mesh);
+    if (opts.shootable === true || (opts.collide !== false && opts.shootable !== false)) shootables.push(mesh);
     return mesh;
   }
 
-  // Floor slab.
-  box(MAP_HALF * 2, 0.4, MAP_HALF * 2, 0, -0.2, 0, 'floor', { castShadow: false });
-
-  // --- Floor seams: a 4 m grid just above the slab, so the yard reads at a glance and
-  // movement has a sense of scale. These are decoration only: no body and no bullet stops on them.
-  for (let i = -20; i <= 20; i += 4) {
-    box(0.07, 0.02, MAP_HALF * 2, i, 0.011, 0, 'hairline', { collide: false, shootable: false, castShadow: false });
-    box(MAP_HALF * 2, 0.02, 0.07, 0, 0.011, i, 'hairline', { collide: false, shootable: false, castShadow: false });
+  function wall(w, d, x, z, height = WALL_HEIGHT, material = 'hairline') {
+    return box(w, height, d, x, z, material);
   }
-  // Lane stripes: two thin ember lines down mid and long, a visual guide to the three lanes.
-  box(0.12, 0.02, 26, 0, 0.013, 2, 'accent', { collide: false, shootable: false, castShadow: false });
-  box(0.12, 0.02, 26, 17.5, 0.013, 2, 'accent', { collide: false, shootable: false, castShadow: false });
-  box(0.12, 0.02, 20, -17.5, 0.013, 8, 'accent', { collide: false, shootable: false, castShadow: false });
 
-  // --- Perimeter.
-  box(MAP_HALF * 2 + 0.8, WALL_HEIGHT, 0.8, 0, WALL_HEIGHT / 2, -MAP_HALF, 'surface');
-  box(MAP_HALF * 2 + 0.8, WALL_HEIGHT, 0.8, 0, WALL_HEIGHT / 2, MAP_HALF, 'surface');
-  box(0.8, WALL_HEIGHT, MAP_HALF * 2, -MAP_HALF, WALL_HEIGHT / 2, 0, 'surface');
-  box(0.8, WALL_HEIGHT, MAP_HALF * 2, MAP_HALF, WALL_HEIGHT / 2, 0, 'surface');
+  function crate(x, z, size, height = size, material = 'surface') {
+    return box(size, height, size, x, z, material, { tile: 1.4 });
+  }
 
-  // --- Lane walls: mid is walled off from A and B, with two connectors each.
-  // East wall of mid, gap at z = -9 (connector to A short) and z = 6.
-  box(0.6, WALL_HEIGHT, 12, 6, WALL_HEIGHT / 2, 13, 'hairline');
-  box(0.6, WALL_HEIGHT, 9, 6, WALL_HEIGHT / 2, 1, 'hairline');
-  box(0.6, WALL_HEIGHT, 8, 6, WALL_HEIGHT / 2, -14, 'hairline');
-  // West wall of mid, gap at z = -2 and z = 8.
-  box(0.6, WALL_HEIGHT, 12, -6, WALL_HEIGHT / 2, 14, 'hairline');
-  box(0.6, WALL_HEIGHT, 8, -6, WALL_HEIGHT / 2, 3, 'hairline');
-  box(0.6, WALL_HEIGHT, 9, -6, WALL_HEIGHT / 2, -13, 'hairline');
+  function barrel(x, z, height = 1.05) {
+    const mesh = new THREE.Mesh(new THREE.CylinderGeometry(0.36, 0.36, height, 14), materials.hairline);
+    mesh.position.set(x, height / 2, z);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    group.add(mesh);
+    mesh.updateMatrixWorld(true);
+    colliders.push(new THREE.Box3().setFromObject(mesh));
+    shootables.push(mesh);
+    return mesh;
+  }
 
-  // --- Site A: raised dock on the east, two containers, a ramp.
-  box(9, 0.9, 9, 13.5, 0.45, -4, 'surface');
-  box(9, 0.35, 0.9, 13.5, 1.05, -8.2, 'hairline');
-  box(2.2, 2.6, 6.2, 16.6, 2.2, -2.5, 'hairline');
-  box(2.6, 2.4, 2.6, 10.2, 1.2, -1.2, 'accent');
-  box(2.6, 2.4, 2.6, 10.2, 1.2, -6.8, 'hairline');
-  box(3, 0.55, 1.4, 13.5, 0.27, -9.6, 'surface'); // ramp lip into A
-  // Crate stack to jump on near long.
-  box(1.5, 1.5, 1.5, 17.6, 0.75, 6.4, 'hairline');
-  box(1.5, 1.5, 1.5, 17.6, 2.25, 6.4, 'surface');
+  // Decoration: visible, but neither solid nor a bullet stop.
+  function trim(w, h, d, x, y, z, material, rotY = 0) {
+    const mesh = new THREE.Mesh(boxGeometry(w, h, d, 3), materials[material]);
+    mesh.position.set(x, y, z);
+    mesh.rotation.y = rotY;
+    group.add(mesh);
+    return mesh;
+  }
 
-  // --- Site B: pump hall on the west, low walls and a pipe cluster.
-  box(10, 0.6, 10, -13.5, 0.3, 2, 'surface');
-  box(3.2, 2.2, 3.2, -16.4, 1.1, 5.4, 'hairline');
-  box(3.2, 2.2, 3.2, -16.4, 1.1, -1.4, 'accent');
-  box(0.9, 1.4, 6.5, -10.6, 0.7, 2, 'hairline');
-  box(6.5, 0.9, 0.9, -13.5, 0.45, -2.4, 'surface');
-  box(1.2, 1.2, 1.2, -9.4, 0.6, 6.2, 'hairline');
+  // --- shell ----------------------------------------------------------------
+  box(MAP_HALF * 2 - 0.2, 0.4, MAP_HALF * 2 - 0.2, 0, 0, 'floor', { y: -0.2, castShadow: false, tile: 2 });
+  wall(43.8, 1.0, 0, -21.4);
+  wall(43.8, 1.0, 0, 21.4);
+  wall(1.0, 43.8, -21.4, 0);
+  wall(1.0, 43.8, 21.4, 0);
 
-  // --- Mid: containers and a central pillar, sightlines broken every few metres.
-  box(3.4, 2.8, 1.6, 0, 1.4, 7.5, 'hairline');
-  box(1.6, 2.8, 3.4, 0, 1.4, 0.5, 'surface');
-  box(2.2, 1.1, 2.2, -2.6, 0.55, -5.5, 'hairline');
-  box(2.2, 1.1, 2.2, 2.6, 0.55, -5.5, 'hairline');
-  box(1.4, 1.4, 1.4, 0, 0.7, -16.5, 'hairline');
+  // --- mid lane: walled on both sides, a door at each end and two windows ----
+  // East wall, gaps at z 0.4..2.6 (A window) and z -10.4..-7.9 (A short door).
+  wall(0.7, 10.4, 6.2, 7.8);
+  wall(0.7, 8.3, 6.2, -3.75);
+  wall(0.7, 2.8, 6.2, -11.8);
+  // West wall, gaps at z 2.4..5.2 (B window) and z -8.5..-6.0 (B exit door).
+  wall(0.7, 7.8, -6.2, 9.1);
+  wall(0.7, 8.4, -6.2, -1.8);
+  wall(0.7, 4.7, -6.2, -10.85);
+  // Mid doors (north) and the CT door (south).
+  wall(4.6, 0.7, -3.9, 13);
+  wall(4.6, 0.7, 3.9, 13);
+  wall(3.6, 0.7, -4.4, -13);
+  wall(3.6, 0.7, 4.4, -13);
 
-  // --- Connectors: short walls that make A short and B exit read as rooms, not gaps.
-  box(5, WALL_HEIGHT, 0.6, 8.5, WALL_HEIGHT / 2, -10.2, 'hairline');
-  box(0.6, WALL_HEIGHT, 4, 10.8, WALL_HEIGHT / 2, -12.2, 'hairline');
-  box(5, WALL_HEIGHT, 0.6, -8.5, WALL_HEIGHT / 2, -8.6, 'hairline');
+  // --- A side: long corridor, A short room --------------------------------
+  wall(0.7, 7.0, 16.5, 9.5);        // long / A divider, open below z 6
+  wall(9.8, 0.7, 11.1, 13);         // T yard wall, long entrance x 16..21
+  wall(6.4, 0.7, 9.4, -10.6);       // A short, south
+  wall(2.6, 0.7, 7.5, -7.9);        // A short, north (opening x 8.8..12.6)
+  wall(0.7, 2.7, 12.6, -9.25);      // A short, east
 
-  // --- Spawn cover so neither side is shot from across the map at the bell.
-  box(3.2, 1.2, 0.8, 0, 0.6, -15.2, 'surface');
-  box(3.2, 1.2, 0.8, 0, 0.6, 15.2, 'surface');
+  // --- B side: tunnel, B exit room ----------------------------------------
+  wall(0.7, 7.0, -16.5, 9.5);       // tunnel wall, north half
+  wall(0.7, 6.5, -16.5, -0.25);     // tunnel wall, south half (mouth at z 3..6)
+  wall(9.8, 0.7, -11.1, 13);        // T yard wall, tunnel entrance x -21..-16
+  wall(1.5, 0.7, -12.25, -8.6);     // B exit, south wall west stub
+  wall(2.3, 0.7, -7.35, -8.6);      // B exit, south wall east stub (door x -11.5..-8.5)
+  wall(2.6, 0.7, -7.5, -5.6);       // B exit, north wall (opening x -13..-8.8)
+  wall(0.7, 3.0, -13.0, -7.1);      // B exit, east wall
 
-  // --- Site markers: a flat quad on the floor with the site letter's colour.
+  // --- yard masses: solid foundry blocks that shape the far corners --------
+  box(7.5, 4.2, 7.5, 17.5, -17.0, 'surface', { tile: 3 });
+  box(7.5, 3.8, 8.5, -17.5, -16.0, 'surface', { tile: 3 });
+  box(6.5, 3.6, 5.5, 18.0, 18.2, 'surface', { tile: 3 });
+  box(5.5, 3.4, 4.5, -18.5, 18.6, 'surface', { tile: 3 });
+
+  // --- site A: containers, a low wall to plant behind, a crate to jump on --
+  box(2.2, 2.6, 3.2, 15.0, -6.8, 'hairline');
+  crate(10.2, -1.4, 1.6);
+  wall(3.4, 0.8, 14.5, -8.4, 0.95, 'hairline');
+  crate(8.6, -5.4, 1.2);
+  wall(3.0, 0.9, 9.6, 0.4, 1.1, 'hairline');
+  crate(18.6, 0.4, 1.4);
+
+  // --- site B: pump hall ------------------------------------------------
+  box(2.2, 2.6, 3.0, -14.6, 6.2, 'hairline');
+  box(1.6, 1.5, 1.6, -9.6, 0.8, 'hairline');
+  wall(3.0, 0.8, -14.6, -2.4, 0.95, 'hairline');
+  crate(-8.2, 6.6, 1.3);
+  box(1.4, 1.2, 2.4, -17.0, -1.0, 'surface');
+
+  // --- mid: one block to play around, crates to peek from ----------------
+  box(3.2, 2.6, 2.2, 0, -2.0, 'hairline');
+  crate(4.6, 6.2, 1.4);
+  crate(-4.6, 6.2, 1.4);
+  box(2.0, 1.1, 2.0, 4.2, -6.4, 'surface');
+  barrel(5.2, -8.0);
+  barrel(10.6, 18.0);
+
+  // --- long: one container leaves a 2.5 m gap to fight through ----------
+  box(2.0, 2.6, 1.6, 20.2, 7.0, 'hairline');
+  crate(20.0, 13.2, 1.3);
+
+  // --- spawn cover: nobody is shot off the spawn at the bell -------------
+  // Split cover leaves the middle of each spawn open, so the first thing a player sees
+  // is the lane in front of them and not a wall two metres away.
+  wall(2.6, 0.8, 3.4, -15.0, 1.15, 'surface');
+  wall(2.6, 0.8, -3.4, -15.0, 1.15, 'surface');
+  crate(-6.0, -17.8, 1.3);
+  crate(5.6, -17.8, 1.3);
+  wall(2.4, 0.8, 9.0, -14.6, 1.0, 'surface');
+  crate(-11.4, -12.4, 1.3);
+
+  wall(2.6, 0.8, 3.4, 15.0, 1.15, 'surface');
+  wall(2.6, 0.8, -3.4, 15.0, 1.15, 'surface');
+  crate(-6.0, 18.4, 1.3);
+  crate(6.0, 18.4, 1.3);
+  wall(2.4, 0.8, 13.0, 16.6, 1.0, 'surface');
+  wall(2.4, 0.8, -12.5, 16.4, 1.0, 'surface');
+
+  // --- dressing: pipes, lamp housings, chimney stacks -------------------
+  for (const z of [8.4, 5.2, 1.0]) {
+    const pipe = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.13, 3.2, 8), materials.muted);
+    pipe.rotation.z = Math.PI / 2;
+    pipe.position.set(-6.2, 3.6, z);
+    pipe.rotation.y = Math.PI / 2;
+    group.add(pipe);
+  }
+  for (const site of SITES) {
+    // The lamp bar sits on the site's container instead of hanging from a ceiling that
+    // does not exist; the point light below it still pools on the pad.
+    const onA = site.name === 'A';
+    const housing = trim(1.4, 0.18, 0.5, onA ? 15.0 : -14.6, 2.86, onA ? -6.8 : 6.2, onA ? 'accent' : 'teal');
+    housing.castShadow = false;
+  }
+  for (const [x, z] of [[17.5, -17.0], [-17.5, -16.0]]) {
+    const stack = new THREE.Mesh(new THREE.CylinderGeometry(0.55, 0.7, 2.6, 10), materials.surface);
+    stack.position.set(x, 5.3, z);
+    stack.castShadow = true;
+    group.add(stack);
+  }
+  // Floor guide strips: a faint lane hint, never a collider.
+  for (const [x, z, w, d, material] of [[0, 5.0, 0.1, 14, 'accent'], [18.0, 8.0, 0.1, 9, 'accent'], [-18.0, 8.5, 0.1, 8, 'accent']]) {
+    const strip = new THREE.Mesh(new THREE.PlaneGeometry(w, d), new THREE.MeshBasicMaterial({
+      color: new THREE.Color(PALETTE[material]), transparent: true, opacity: 0.22, depthWrite: false,
+    }));
+    strip.rotation.x = -Math.PI / 2;
+    strip.position.set(x, 0.012, z);
+    group.add(strip);
+  }
+  // Door frames: a lit edge on the four chokepoints, so a dark gap reads as a way through
+  // instead of a hole in a wall.
+  for (const [x, z, span] of [[0, -13, 2.65], [0, 13, 1.65], [6.2, -9.2, 1.0], [-6.2, -7.2, 1.0]]) {
+    const across = z === -13 || z === 13;
+    for (const side of [-1, 1]) {
+      const px = across ? x + side * span : x;
+      const pz = across ? z : z + side * span;
+      const strip = trim(0.08, 3.2, 0.08, px, 1.6, pz, 'accent');
+      strip.castShadow = false;
+    }
+  }
+
+  // --- sites: hazard pad plus a painted ring, both flat on the floor ----
   const siteMeshes = [];
   for (const site of SITES) {
-    const ring = new THREE.Mesh(
-      new THREE.RingGeometry(site.radius - 0.35, site.radius, 40),
-      new THREE.MeshBasicMaterial({
-        color: new THREE.Color(site.name === 'A' ? PALETTE.accent : PALETTE.teal),
-        transparent: true,
-        opacity: 0.35,
-        side: THREE.DoubleSide,
-        depthWrite: false,
-      }),
-    );
-    ring.rotation.x = -Math.PI / 2;
-    ring.position.set(site.x, 0.9, site.z);
-    group.add(ring);
-    siteMeshes.push(ring);
+    const pad = new THREE.Mesh(new THREE.PlaneGeometry(site.radius * 1.9, site.radius * 1.9), materials.pad);
+    pad.rotation.x = -Math.PI / 2;
+    pad.position.set(site.x, 0.008, site.z);
+    pad.receiveShadow = true;
+    group.add(pad);
+    const decal = siteDecal(site);
+    group.add(decal);
+    siteMeshes.push(decal);
   }
 
-  // --- Light: a warm ember key from the south-east, a cold fill from the north,
-  // a low hemisphere and a soft ambient so shadowed faces still read.
-  const ambient = new THREE.AmbientLight(new THREE.Color('#9aacbb'), 1.05);
-  scene.add(ambient);
+  // --- light: warm key from the south-east, cold fill, ember pools on site ----
+  // A cool sky over a warm key keeps flat boxes reading as separate planes instead of
+  // one brown mass, which is the whole trick of a texture-less blockout.
+  scene.add(new THREE.AmbientLight(new THREE.Color('#8fa6b8'), 0.9));
+  scene.add(new THREE.HemisphereLight(new THREE.Color('#a6bccc'), new THREE.Color('#242c33'), 1.6));
 
-  const hemi = new THREE.HemisphereLight(new THREE.Color('#7d8f9e'), new THREE.Color('#2a333c'), 1.5);
-  scene.add(hemi);
-
-  const key = new THREE.DirectionalLight(new THREE.Color('#ffc79a'), 3.1);
+  const key = new THREE.DirectionalLight(new THREE.Color('#ffd2a8'), 3.1);
   key.position.set(18, 24, 14);
   key.target.position.set(0, 0, 0);
   key.castShadow = true;
   key.shadow.mapSize.set(1024, 1024);
-  key.shadow.camera.left = -28;
-  key.shadow.camera.right = 28;
-  key.shadow.camera.top = 28;
-  key.shadow.camera.bottom = -28;
+  key.shadow.camera.left = -26;
+  key.shadow.camera.right = 26;
+  key.shadow.camera.top = 26;
+  key.shadow.camera.bottom = -26;
   key.shadow.camera.far = 80;
-  key.shadow.bias = -0.0008;
+  key.shadow.bias = -0.0009;
   scene.add(key, key.target);
 
-  const fill = new THREE.DirectionalLight(new THREE.Color('#a8bccc'), 0.6);
+  const fill = new THREE.DirectionalLight(new THREE.Color('#b6cddd'), 0.85);
   fill.position.set(-16, 14, -18);
   scene.add(fill);
 
-  // Ember pools at each site, so the two objectives glow from a distance.
   for (const site of SITES) {
-    const lamp = new THREE.PointLight(new THREE.Color(PALETTE.accent), 22, 16, 2);
-    lamp.position.set(site.x, 3.4, site.z);
+    const lamp = new THREE.PointLight(new THREE.Color(site.name === 'A' ? PALETTE.accent : PALETTE.teal), 30, 17, 2);
+    lamp.position.set(site.x, 3.9, site.z);
     scene.add(lamp);
   }
 
-  const waypoints = WAYPOINTS.map((w) => ({ ...w, pos: new THREE.Vector3(w.x, 0, w.z) }));
+  // Spawn lamps: a wall-mounted floodlight at each bell, so the first second of a round
+  // is readable and the light has something visible to come from.
+  for (const z of [-18.6, 18.6]) {
+    const lamp = new THREE.PointLight(new THREE.Color('#ffd9b0'), 16, 13, 2);
+    lamp.position.set(0, 3.2, z);
+    scene.add(lamp);
+    const bar = trim(3.0, 0.14, 0.3, 0, 3.6, Math.sign(z) * 20.72, 'ink');
+    bar.castShadow = false;
+  }
 
-  return { colliders, shootables, group, sites: SITES, siteMeshes, waypoints, spawns: SPAWNS };
+  return { colliders, shootables, group, sites: SITES, siteMeshes, waypoints: WAYPOINTS, spawns: SPAWNS };
 }

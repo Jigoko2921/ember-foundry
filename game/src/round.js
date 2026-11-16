@@ -1,23 +1,27 @@
 // Match rules: freeze time, live rounds, the bomb, money and the score. The simulation
-// calls tick() once per fixed step and reads one small state object; rendering never writes it.
-import * as THREE from 'three';
-
+// calls tick() once per fixed step and reads one small state object; rendering never
+// writes it, so a screenshot and a live round cannot disagree about the clock.
 export const PHASE = { BUY: 'buy', LIVE: 'live', END: 'end' };
 
-const FREEZE_SECONDS = 7;
+const FREEZE_SECONDS = 6;
 const ROUND_SECONDS = 115;
 const END_SECONDS = 5;
 const BOMB_SECONDS = 40;
 const PLANT_SECONDS = 3.2;
 const DEFUSE_SECONDS = 6.0;
-const DEFUSE_WITH_KIT = 3.5;
+const DEFUSE_KIT_SECONDS = 3.5;
 
-const START_MONEY = 800;
-const MAX_MONEY = 16000;
-const WIN_REWARD = 3250;
-const LOSS_BASE = 1400;
-const LOSS_STEP = 500;
-const LOSS_MAX = 3400;
+// The economy is what makes a lost round a choice: save, or buy and break the streak.
+export const ECONOMY = {
+  start: 800,
+  max: 16000,
+  win: 3250,
+  lossBase: 1400,
+  lossStep: 500,
+  lossMax: 3400,
+  plant: 800,
+  defuse: 300,
+};
 
 export function createMatch() {
   const state = {
@@ -36,18 +40,16 @@ export function createMatch() {
       z: 0,
       timer: BOMB_SECONDS,
       siteName: null,
-      plantedAt: 0,
-      defuseProgress: 0,
       plantProgress: 0,
+      defuseProgress: 0,
     },
     money: new Map(),
+    teamOf: new Map(),
     events: [],
   };
 
-  const temp = new THREE.Vector3();
-
   function emit(type, data = {}) {
-    state.events.push({ type, ...data, at: state.round });
+    state.events.push({ type, ...data });
   }
 
   function drainEvents() {
@@ -92,37 +94,17 @@ export function createMatch() {
     emit('roundEnd', { winner, reason });
   }
 
-  function rewardTeam(team, amount) {
-    for (const [id, money] of state.money) {
-      if (state.teamOf && state.teamOf(id) === team) state.money.set(id, Math.min(MAX_MONEY, money + amount));
-    }
-  }
-
-  function payRoundEnd() {
-    const winner = state.winner;
-    if (winner === 'ct' || winner === 't') {
-      rewardTeam(winner, WIN_REWARD);
-      const loser = winner === 'ct' ? 't' : 'ct';
-      const streak = state.lossStreak[loser];
-      rewardTeam(loser, Math.min(LOSS_MAX, LOSS_BASE + LOSS_STEP * Math.max(0, streak - 1)));
-    } else {
-      rewardTeam('ct', 1900);
-      rewardTeam('t', 1900);
-    }
-  }
-
   function registerPlayer(id, team) {
-    state.money.set(id, START_MONEY);
-    if (!state.teamOf) state.teamOf = new Map();
+    state.money.set(id, ECONOMY.start);
     state.teamOf.set(id, team);
   }
 
   function teamOf(id) {
-    return state.teamOf ? state.teamOf.get(id) : null;
+    return state.teamOf.get(id) ?? null;
   }
 
   function addMoney(id, amount) {
-    state.money.set(id, Math.min(MAX_MONEY, (state.money.get(id) ?? 0) + amount));
+    state.money.set(id, Math.min(ECONOMY.max, (state.money.get(id) ?? 0) + amount));
   }
 
   function moneyOf(id) {
@@ -136,21 +118,41 @@ export function createMatch() {
     return true;
   }
 
+  function payTeam(team, amount) {
+    for (const [id, cash] of state.money) {
+      if (teamOf(id) === team) state.money.set(id, Math.min(ECONOMY.max, cash + amount));
+    }
+  }
+
+  function payRoundEnd() {
+    if (state.winner === 'ct' || state.winner === 't') {
+      payTeam(state.winner, ECONOMY.win);
+      const loser = state.winner === 'ct' ? 't' : 'ct';
+      const amount = Math.min(ECONOMY.lossMax, ECONOMY.lossBase + ECONOMY.lossStep * Math.max(0, state.lossStreak[loser] - 1));
+      payTeam(loser, amount);
+    } else {
+      payTeam('ct', 1900);
+      payTeam('t', 1900);
+    }
+  }
+
   function aliveCount(bodies, team) {
     let n = 0;
-    for (const body of bodies) if (body.team === team && body.alive) n += 1;
+    for (let i = 0; i < bodies.length; i += 1) {
+      const body = bodies[i];
+      if (body.team === team && body.alive) n += 1;
+    }
     return n;
   }
 
   function tick(dt, ctx) {
-    // ctx: { bodies, playerBody, bombCarrier, sites, playerInput:{plant,defuse}, playerHasKit }
+    // ctx: { bodies, playerBody, playerInput: {plant, defuse}, nearestSite, playerHasKit }
     state.phaseLeft = Math.max(0, state.phaseLeft - dt);
 
     if (state.phase === PHASE.BUY) {
-      // Assign the bomb to a living T at the bell.
       if (state.bomb.carrier === null) {
-        const carriers = ctx.bodies.filter((b) => b.team === 't' && b.alive);
-        if (carriers.length) state.bomb.carrier = carriers[0].id;
+        const carrier = ctx.bodies.find((b) => b.team === 't' && b.alive);
+        if (carrier) state.bomb.carrier = carrier.id;
       }
       if (state.phaseLeft <= 0) {
         state.phase = PHASE.LIVE;
@@ -169,83 +171,77 @@ export function createMatch() {
       return;
     }
 
-    // --- live
+    const bomb = state.bomb;
     const ctAlive = aliveCount(ctx.bodies, 'ct');
     const tAlive = aliveCount(ctx.bodies, 't');
 
-    // Bomb carried: if the carrier dies, the bomb drops and a living T can pick it up.
-    if (state.bomb.state === 'carried') {
-      const carrier = ctx.bodies.find((b) => b.id === state.bomb.carrier);
+    if (bomb.state === 'carried') {
+      // The bomb changes hands rather than sitting on the floor: a dropped objective that
+      // nobody can pick up is a round that stalls, and the bots have no pickup verb.
+      const carrier = ctx.bodies.find((b) => b.id === bomb.carrier);
       if (!carrier || !carrier.alive) {
         const taker = ctx.bodies.find((b) => b.team === 't' && b.alive);
-        state.bomb.carrier = taker ? taker.id : null;
+        bomb.carrier = taker ? taker.id : null;
       }
-
-      // Planting: the player holds E on a site, or a T bot with the bomb stands on one.
-      const holder = ctx.bodies.find((b) => b.id === state.bomb.carrier && b.alive);
+      const holder = ctx.bodies.find((b) => b.id === bomb.carrier && b.alive);
       if (holder) {
         const site = ctx.nearestSite(holder.position);
-        if (site) {
-          const wantsPlant = holder.id === ctx.playerBody.id ? ctx.playerInput.plant : holder.team === 't';
-          if (wantsPlant) {
-            state.bomb.plantProgress += dt;
-            if (state.bomb.plantProgress >= PLANT_SECONDS) {
-              state.bomb.state = 'planted';
-              state.bomb.x = holder.position.x;
-              state.bomb.z = holder.position.z;
-              state.bomb.siteName = site.name;
-              state.bomb.carrier = null;
-              state.bomb.timer = BOMB_SECONDS;
-              state.bomb.plantProgress = 0;
-              emit('planted', { site: site.name });
-            }
-          } else {
-            state.bomb.plantProgress = 0;
+        const wantsPlant = holder.id === ctx.playerBody.id ? ctx.playerInput.plant : true;
+        if (site && wantsPlant) {
+          bomb.plantProgress += dt;
+          if (bomb.plantProgress >= PLANT_SECONDS) {
+            bomb.state = 'planted';
+            bomb.x = holder.position.x;
+            bomb.z = holder.position.z;
+            bomb.siteName = site.name;
+            bomb.carrier = null;
+            bomb.timer = BOMB_SECONDS;
+            bomb.plantProgress = 0;
+            emit('planted', { site: site.name });
           }
         } else {
-          state.bomb.plantProgress = 0;
+          bomb.plantProgress = 0;
         }
       }
-    } else if (state.bomb.state === 'planted') {
-      state.bomb.timer = Math.max(0, state.bomb.timer - dt);
-      if (state.bomb.timer <= 0) {
+    } else if (bomb.state === 'planted') {
+      bomb.timer = Math.max(0, bomb.timer - dt);
+      if (bomb.timer <= 0) {
         emit('exploded');
         endRound('t', 'The bomb detonated');
         return;
       }
-      // Defusing: player or bot within reach, holding E.
-      const defusers = ctx.bodies.filter((b) => b.team === 'ct' && b.alive
-        && Math.hypot(b.position.x - state.bomb.x, b.position.z - state.bomb.z) < 2.0);
-      let anyDefusing = false;
-      for (const body of defusers) {
-        const wants = body.id === ctx.playerBody.id ? ctx.playerInput.defuse : true;
-        if (!wants) continue;
-        anyDefusing = true;
-        const need = body.id === ctx.playerBody.id && ctx.playerHasKit ? DEFUSE_WITH_KIT : DEFUSE_SECONDS;
-        state.bomb.defuseProgress += dt;
-        if (state.bomb.defuseProgress >= need) {
-          state.bomb.state = 'defused';
+      // Defusing: any CT in reach who is holding the use key (bots hold it by standing still).
+      let defuser = null;
+      for (const body of ctx.bodies) {
+        if (body.team !== 'ct' || !body.alive) continue;
+        if (Math.hypot(body.position.x - bomb.x, body.position.z - bomb.z) > 2.0) continue;
+        if (body.id === ctx.playerBody.id && !ctx.playerInput.defuse) continue;
+        defuser = body;
+        break;
+      }
+      if (defuser) {
+        const kit = defuser.id === ctx.playerBody.id && ctx.playerHasKit;
+        bomb.defuseProgress += dt;
+        if (bomb.defuseProgress >= (kit ? DEFUSE_KIT_SECONDS : DEFUSE_SECONDS)) {
+          bomb.state = 'defused';
           emit('defused');
           endRound('ct', 'Bomb defused');
           return;
         }
+      } else {
+        bomb.defuseProgress = Math.max(0, bomb.defuseProgress - dt * 2);
       }
-      if (!anyDefusing) state.bomb.defuseProgress = Math.max(0, state.bomb.defuseProgress - dt * 2);
     }
 
-    if (ctAlive === 0 && state.bomb.state !== 'planted') {
+    if (ctAlive === 0 && bomb.state !== 'planted') {
       endRound('t', 'Counter-Terrorists eliminated');
       return;
     }
-    if (tAlive === 0) {
-      if (state.bomb.state === 'planted') {
-        // The bomb still has to be defused: the round goes on.
-      } else {
-        endRound('ct', 'Terrorists eliminated');
-        return;
-      }
+    if (tAlive === 0 && bomb.state !== 'planted') {
+      endRound('ct', 'Terrorists eliminated');
+      return;
     }
-    if (state.phaseLeft <= 0) {
+    if (state.phaseLeft <= 0 && bomb.state !== 'planted') {
       endRound('ct', 'Time ran out');
     }
   }

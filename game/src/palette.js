@@ -1,12 +1,13 @@
-// The look plan, in one place. Ember Foundry: warm ember light on cool steel, pale bone ink.
-// Every surface colour the game uses comes from these seven values; the lighting does the rest.
+// The look plan in one place: warm ember light over cold steel and pale bone ink.
+// world.js tints every material from these values, so the mood lives here and not in
+// a hundred literal colours scattered through the map.
 export const PALETTE = {
-  canvas: '#12171c',
-  surface: '#2b353e',
-  hairline: '#3f4c57',
-  floor: '#39434d',
-  ink: '#ece7da',
-  muted: '#9aa7b2',
+  canvas: '#0d1216',
+  floor: '#414c57',
+  surface: '#333e48',
+  hairline: '#4a5763',
+  ink: '#ece6d8',
+  muted: '#9dabb7',
   accent: '#ff7a2f',
   teal: '#3ec9b0',
 };

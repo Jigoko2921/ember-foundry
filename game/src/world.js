@@ -422,10 +422,10 @@ export function createWorld(scene) {
   // --- light: warm key from the south-east, cold fill, ember pools on site ----
   // A cool sky over a warm key keeps flat boxes reading as separate planes instead of
   // one brown mass, which is the whole trick of a texture-less blockout.
-  scene.add(new THREE.AmbientLight(new THREE.Color('#8fa6b8'), 0.9));
-  scene.add(new THREE.HemisphereLight(new THREE.Color('#a6bccc'), new THREE.Color('#242c33'), 1.6));
+  scene.add(new THREE.AmbientLight(new THREE.Color('#b9a293'), 0.75));
+  scene.add(new THREE.HemisphereLight(new THREE.Color('#d8b596'), new THREE.Color('#2a2622'), 1.35));
 
-  const key = new THREE.DirectionalLight(new THREE.Color('#ffd2a8'), 3.1);
+  const key = new THREE.DirectionalLight(new THREE.Color('#ffc38a'), 3.6);
   key.position.set(18, 24, 14);
   key.target.position.set(0, 0, 0);
   key.castShadow = true;
@@ -438,7 +438,7 @@ export function createWorld(scene) {
   key.shadow.bias = -0.0009;
   scene.add(key, key.target);
 
-  const fill = new THREE.DirectionalLight(new THREE.Color('#b6cddd'), 0.85);
+  const fill = new THREE.DirectionalLight(new THREE.Color('#9fc0d4'), 0.7);
   fill.position.set(-16, 14, -18);
   scene.add(fill);
 

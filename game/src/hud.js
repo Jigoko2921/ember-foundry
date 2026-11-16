@@ -40,6 +40,13 @@ export function createHud() {
     actionLabel: $('action-label'),
     actionBar: $('action-bar'),
     flash: $('flash'),
+    radar: $('radar'),
+    radarLabel: $('radar-label'),
+    radio: $('radio'),
+    equipment: $('equipment'),
+    pipsCT: $('pips-ct'),
+    pipsT: $('pips-t'),
+    roundOf: $('round-of'),
   };
 
   const last = {};
@@ -101,10 +108,12 @@ export function createHud() {
     el.clock.classList.toggle('quiet', phase === 'buy');
   }
 
-  function setRound(n) {
-    if (n === last.round) return;
+  function setRound(n, total) {
+    if (n === last.round && total === last.roundTotal) return;
     last.round = n;
+    last.roundTotal = total;
     el.roundLabel.textContent = `ROUND ${n}`;
+    if (el.roundOf) el.roundOf.textContent = total ? `OF ${total}` : '';
   }
 
   function setScore(ct, t) {
@@ -244,12 +253,179 @@ export function createHud() {
     el.board.hidden = true;
   }
 
+  // ---------- radar ----------
+  // North-up minimap on a 2x canvas (crisp at 1080p). Redrawn only when a value that
+  // matters changes, so a still frame costs one string compare.
+  const radarCtx = el.radar ? el.radar.getContext('2d') : null;
+  let radarStamp = '';
+
+  function drawRadar(d) {
+    if (!radarCtx) return;
+    const stamp = `${d.player.x.toFixed(1)}|${d.player.z.toFixed(1)}|${d.player.yaw.toFixed(2)}|${d.bomb.on ? d.bomb.x.toFixed(0) + d.bomb.z.toFixed(0) : '-'}|${d.enemies.map((e) => (e.visible ? 1 : 0)).join('')}|${d.mates.map((m) => (m.alive ? 1 : 0)).join('')}|${d.tick}`;
+    if (stamp === radarStamp) return;
+    radarStamp = stamp;
+    const W = el.radar.width;
+    const H = el.radar.height;
+    const half = d.half || 22;
+    const sx = W / (half * 2);
+    const sz = H / (half * 2);
+    const px = (x) => (x + half) * sx;
+    const py = (z) => (z + half) * sz;
+
+    radarCtx.clearRect(0, 0, W, H);
+    radarCtx.fillStyle = '#080c0fe6';
+    radarCtx.fillRect(0, 0, W, H);
+
+    radarCtx.strokeStyle = '#ffffff0d';
+    radarCtx.lineWidth = 1;
+    for (let g = -half; g <= half; g += 8) {
+      radarCtx.beginPath(); radarCtx.moveTo(px(g), 0); radarCtx.lineTo(px(g), H); radarCtx.stroke();
+      radarCtx.beginPath(); radarCtx.moveTo(0, py(g)); radarCtx.lineTo(W, py(g)); radarCtx.stroke();
+    }
+
+    radarCtx.fillStyle = '#2b3742';
+    radarCtx.strokeStyle = '#4c5d6b';
+    radarCtx.lineWidth = 1.5;
+    for (const b of d.boxes) {
+      const x = px(b.minX);
+      const y = py(b.minZ);
+      const w = (b.maxX - b.minX) * sx;
+      const h = (b.maxZ - b.minZ) * sz;
+      if (w < 1.5 || h < 1.5) continue;
+      radarCtx.fillRect(x, y, w, h);
+      radarCtx.strokeRect(x, y, w, h);
+    }
+
+    for (const s of d.sites) {
+      const x = px(s.x);
+      const y = py(s.z);
+      radarCtx.strokeStyle = s.name === 'A' ? '#ff7a2f' : '#3ec9b0';
+      radarCtx.lineWidth = 2;
+      radarCtx.beginPath(); radarCtx.arc(x, y, 11, 0, Math.PI * 2); radarCtx.stroke();
+      radarCtx.fillStyle = s.name === 'A' ? '#ff7a2f22' : '#3ec9b022';
+      radarCtx.fill();
+      radarCtx.fillStyle = s.name === 'A' ? '#ff7a2f' : '#3ec9b0';
+      radarCtx.font = 'bold 13px ui-monospace, monospace';
+      radarCtx.textAlign = 'center';
+      radarCtx.textBaseline = 'middle';
+      radarCtx.fillText(s.name, x, y + 0.5);
+    }
+
+    for (const m of d.mates) {
+      if (!m.alive) continue;
+      radarCtx.fillStyle = '#3ec9b0';
+      radarCtx.beginPath(); radarCtx.arc(px(m.x), py(m.z), 3.2, 0, Math.PI * 2); radarCtx.fill();
+    }
+
+    // Enemies only while spotted: the radar must not become a wallhack.
+    for (const e of d.enemies) {
+      if (!e.alive || !e.visible) continue;
+      radarCtx.fillStyle = '#ff5a3c';
+      radarCtx.beginPath(); radarCtx.arc(px(e.x), py(e.z), 3.6, 0, Math.PI * 2); radarCtx.fill();
+      radarCtx.strokeStyle = '#ff5a3c66';
+      radarCtx.lineWidth = 2;
+      radarCtx.beginPath(); radarCtx.arc(px(e.x), py(e.z), 7, 0, Math.PI * 2); radarCtx.stroke();
+    }
+
+    if (d.bomb.on) {
+      const x = px(d.bomb.x);
+      const y = py(d.bomb.z);
+      radarCtx.fillStyle = '#ff7a2f';
+      radarCtx.beginPath();
+      radarCtx.arc(x, y, 4 + Math.sin(d.tick * 6) * 1.6, 0, Math.PI * 2);
+      radarCtx.fill();
+    }
+
+    const cx = px(d.player.x);
+    const cy = py(d.player.z);
+    const ang = Math.atan2(-Math.cos(d.player.yaw), -Math.sin(d.player.yaw));
+    const cone = radarCtx.createRadialGradient(cx, cy, 4, cx, cy, 46);
+    cone.addColorStop(0, '#ffffff33');
+    cone.addColorStop(1, '#ffffff00');
+    radarCtx.fillStyle = cone;
+    radarCtx.beginPath();
+    radarCtx.moveTo(cx, cy);
+    radarCtx.arc(cx, cy, 46, ang - 0.62, ang + 0.62);
+    radarCtx.closePath();
+    radarCtx.fill();
+
+    radarCtx.save();
+    radarCtx.translate(cx, cy);
+    radarCtx.rotate(ang + Math.PI / 2);
+    radarCtx.fillStyle = '#ffffff';
+    radarCtx.beginPath();
+    radarCtx.moveTo(0, -7);
+    radarCtx.lineTo(5, 5);
+    radarCtx.lineTo(0, 2.4);
+    radarCtx.lineTo(-5, 5);
+    radarCtx.closePath();
+    radarCtx.fill();
+    radarCtx.restore();
+  }
+
+  function setRadarLabel(text) {
+    if (text === last.radarLabel) return;
+    last.radarLabel = text;
+    if (el.radarLabel) el.radarLabel.textContent = text;
+  }
+
+  // ---------- equipment ----------
+  function setEquipment(state) {
+    const key = `${state.slot}|${state.primary}|${state.secondary}|${state.frag}|${state.smoke}|${state.kind}`;
+    if (key === last.equipKey) return;
+    last.equipKey = key;
+    el.equipment.textContent = '';
+    const slots = [
+      { k: '1', name: state.primary || 'VK-47', on: state.slot === 1 },
+      { k: '2', name: state.secondary || 'P9', on: state.slot === 2 },
+      { k: '3', name: 'KNIFE', on: state.slot === 3 },
+      { k: '4', name: `FRAG ×${state.frag}`, on: state.kind === 'he' && state.frag > 0, dim: state.frag <= 0 },
+      { k: '5', name: `SMOKE ×${state.smoke}`, on: state.kind === 'smoke' && state.smoke > 0, dim: state.smoke <= 0 },
+    ];
+    for (const s of slots) {
+      const d = document.createElement('div');
+      d.className = `eq${s.on ? ' on' : ''}${s.dim ? ' dim' : ''}`;
+      d.innerHTML = `<b>${s.k}</b><span>${s.name}</span>`;
+      el.equipment.appendChild(d);
+    }
+  }
+
+  // ---------- radio ----------
+  let radioTimer = 0;
+  function radio(text, team) {
+    if (!el.radio) return;
+    el.radio.textContent = text;
+    el.radio.className = team ? `on ${team}` : 'on';
+    clearTimeout(radioTimer);
+    if (still()) return;
+    radioTimer = setTimeout(() => el.radio.classList.remove('on'), 4600);
+  }
+
+  // ---------- alive pips ----------
+  function setAlive(ct, t, ctMax = 3, tMax = 3) {
+    const key = `${ct}/${t}`;
+    if (key === last.aliveKey) return;
+    last.aliveKey = key;
+    const draw = (host, n, max) => {
+      if (!host) return;
+      host.textContent = '';
+      for (let i = 0; i < max; i += 1) {
+        const pip = document.createElement('i');
+        if (i < n) pip.className = 'up';
+        host.appendChild(pip);
+      }
+    };
+    draw(el.pipsCT, ct, ctMax);
+    draw(el.pipsT, t, tMax);
+  }
+
   return {
     setVitals, setAmmo, setMoney, setClock, setRound, setScore,
     killFeed, bombBanner, banner, hitMarker, flashDamage,
     setSpread, setAction,
     showOverlay, hideOverlay,
     openBuy, closeBuy, showBoard, hideBoard,
+    drawRadar, setRadarLabel, setEquipment, radio, setAlive,
     onPlay(handler) { playHandler = handler; },
     onBuy(handler) { buyHandler = handler; },
     onCloseBuy(handler) { closeHandler = handler; },

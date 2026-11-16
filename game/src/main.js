@@ -49,12 +49,41 @@ renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.1;
+renderer.toneMappingExposure = 1.18;
 document.getElementById('game').appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(PALETTE.canvas);
-scene.fog = new THREE.Fog(new THREE.Color(PALETTE.canvas), 30, 74);
+scene.fog = new THREE.Fog(new THREE.Color('#6b5a58'), 26, 92);
+
+// A dusk dome instead of a flat clear colour: the horizon burns, the zenith cools, and
+// every silhouette in the yard gains a rim. One draw call, no texture, no light cost.
+{
+  const sky = new THREE.Mesh(
+    new THREE.SphereGeometry(240, 32, 16),
+    new THREE.ShaderMaterial({
+      side: THREE.BackSide,
+      depthWrite: false,
+      fog: false,
+      uniforms: {
+        zenith: { value: new THREE.Color('#16233b') },
+        haze: { value: new THREE.Color('#7c6370') },
+        ember: { value: new THREE.Color('#e8975a') },
+      },
+      vertexShader: 'varying vec3 vDir; void main() { vDir = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+      fragmentShader: [
+        'uniform vec3 zenith; uniform vec3 haze; uniform vec3 ember; varying vec3 vDir;',
+        'void main() {',
+        '  float h = normalize(vDir).y;',
+        '  vec3 c = h > 0.0 ? mix(haze, zenith, pow(h, 0.55)) : mix(haze, ember, pow(-h, 0.75));',
+        '  gl_FragColor = vec4(c, 1.0);',
+        '}',
+      ].join('\n'),
+    }),
+  );
+  sky.frustumCulled = false;
+  scene.add(sky);
+}
 
 const camera = new THREE.PerspectiveCamera(74, window.innerWidth / window.innerHeight, 0.05, 180);
 scene.add(camera);
@@ -195,6 +224,8 @@ const rig = createWeaponRig(camera);
 const inventory = { pistol: createWeaponState(WEAPONS.pistol), rifle: null, smg: null };
 let playerWeapon = inventory.pistol;
 let grenades = 0;
+let smokeCount = 0;
+let grenadeKind = 'he';
 rig.show('pistol');
 
 // --- input -------------------------------------------------------------------
@@ -223,6 +254,10 @@ const input = createInput(renderer.domElement, {
     if (code === 'Digit1') selectWeapon('rifle');
     if (code === 'Digit2') selectWeapon('smg');
     if (code === 'Digit3') selectWeapon('pistol');
+    if (code === 'Digit4') {
+      grenadeKind = grenadeKind === 'he' ? 'smoke' : 'he';
+      hud.radio(grenadeKind === 'smoke' ? 'Utility ready: smoke' : 'Utility ready: frag', null);
+    }
     if (code === 'Tab') hud.showBoard(scoreRows());
   },
 });
@@ -405,20 +440,30 @@ function blockedAt(x, y, z, radius) {
 }
 
 function throwGrenade() {
-  if (shotMode || !playerBody.alive || grenades <= 0 || buyOpen) return;
+  if (shotMode || !playerBody.alive || buyOpen) return;
   if (match.state.phase !== PHASE.LIVE) return;
-  grenades -= 1;
+  let kind = grenadeKind;
+  if (kind === 'he' && grenades <= 0 && smokeCount > 0) kind = 'smoke';
+  if (kind === 'smoke' && smokeCount <= 0 && grenades > 0) kind = 'he';
+  if (kind === 'he' && grenades <= 0) return;
+  if (kind === 'smoke' && smokeCount <= 0) return;
+  if (kind === 'he') grenades -= 1;
+  else smokeCount -= 1;
   const direction = new THREE.Vector3();
   camera.getWorldDirection(direction);
   const mesh = grenadeMesh.clone();
+  if (kind === 'smoke') {
+    mesh.material = smokeShellMaterial;
+  }
   mesh.position.copy(camera.position).addScaledVector(direction, 0.55);
   scene.add(mesh);
   liveGrenades.push({
     mesh,
+    kind,
     vx: direction.x * 17,
     vy: direction.y * 17 + 3.4,
     vz: direction.z * 17,
-    fuse: GRENADE.fuse,
+    fuse: kind === 'smoke' ? GRENADE.fuse * 0.75 : GRENADE.fuse,
   });
 }
 
@@ -464,10 +509,113 @@ function stepGrenades(dt) {
       grenade.mesh.position.y = nextY;
     }
     if (grenade.fuse <= 0) {
-      explodeGrenade(grenade);
+      if (grenade.kind === 'smoke') {
+        const { x, y, z } = grenade.mesh.position;
+        scene.remove(grenade.mesh);
+        spawnSmoke(x, y, z);
+        audio.explode();
+        pushSound(x, z, playerBody.team, 26);
+      } else {
+        explodeGrenade(grenade);
+      }
       liveGrenades.splice(i, 1);
     }
   }
+}
+
+// --- smoke -------------------------------------------------------------------
+// A smoke is seven soft spheres that grow, drift and fade. It is also a real occluder:
+// smokeBlocks() tests the segment a bot is looking along, so the cloud breaks sight the
+// same way a wall does. One puff count, one material each, no per-frame allocation.
+const SMOKE_LIFE = 14;
+const SMOKE_RADIUS = 3.6;
+const smokes = [];
+const smokeShellMaterial = new THREE.MeshStandardMaterial({
+  color: new THREE.Color('#cfd6d9'),
+  emissive: new THREE.Color('#8fa0a6'),
+  emissiveIntensity: 0.25,
+  roughness: 0.9,
+});
+
+// A soft round falloff, painted once into a canvas: sprite puffs then read as smoke
+// instead of a pile of grey spheres, and every puff is still one billboard draw.
+function smokeTexture() {
+  const c = document.createElement('canvas');
+  c.width = 128;
+  c.height = 128;
+  const g = c.getContext('2d');
+  const grad = g.createRadialGradient(64, 64, 6, 64, 64, 62);
+  grad.addColorStop(0, 'rgba(255,255,255,0.95)');
+  grad.addColorStop(0.42, 'rgba(255,255,255,0.5)');
+  grad.addColorStop(0.75, 'rgba(255,255,255,0.16)');
+  grad.addColorStop(1, 'rgba(255,255,255,0)');
+  g.fillStyle = grad;
+  g.fillRect(0, 0, 128, 128);
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+const SMOKE_TEX = smokeTexture();
+
+function spawnSmoke(x, y, z) {
+  const group = new THREE.Group();
+  group.position.set(x, Math.max(1.3, y + 0.2), z);
+  const puffs = [];
+  for (let i = 0; i < 9; i += 1) {
+    const puff = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: SMOKE_TEX,
+      color: new THREE.Color(i % 2 ? '#d9d4cb' : '#b3ada6'),
+      transparent: true,
+      opacity: 0,
+      depthWrite: false,
+    }));
+    const angle = (i / 9) * Math.PI * 2;
+    const ring = 0.6 + (i % 3) * 0.5;
+    puff.position.set(Math.cos(angle) * ring, (i % 4) * 0.34, Math.sin(angle) * ring);
+    group.add(puff);
+    puffs.push(puff);
+  }
+  scene.add(group);
+  smokes.push({ group, puffs, born: elapsed, x, y: group.position.y, z, drift: (smokes.length % 5) * 0.7 });
+}
+
+function updateSmoke() {
+  for (let i = smokes.length - 1; i >= 0; i -= 1) {
+    const cloud = smokes[i];
+    const age = elapsed - cloud.born;
+    if (age > SMOKE_LIFE) {
+      scene.remove(cloud.group);
+      for (const puff of cloud.puffs) puff.material.dispose();
+      smokes.splice(i, 1);
+      continue;
+    }
+    const grow = Math.min(1, age / 1.3);
+    const fade = age > SMOKE_LIFE - 2.2 ? (SMOKE_LIFE - age) / 2.2 : 1;
+    const scale = (1.2 + grow * 2.4) * (1 + age * 0.035);
+    cloud.group.rotation.y = age * 0.12 + cloud.drift;
+    for (let p = 0; p < cloud.puffs.length; p += 1) {
+      const puff = cloud.puffs[p];
+      const wobble = 0.86 + 0.14 * Math.sin(age * 0.9 + p);
+      puff.scale.set(scale * wobble, scale * wobble, 1);
+      puff.material.opacity = 0.44 * grow * fade;
+    }
+  }
+}
+
+// Distance from the cloud centre to the ray, not a sphere overlap: a bot behind the smoke
+// stays blind even when its eye is technically outside the sphere's radius.
+function smokeBlocks(eye, dir, distance) {
+  for (const cloud of smokes) {
+    const px = cloud.x - eye.x;
+    const py = cloud.y - eye.y;
+    const pz = cloud.z - eye.z;
+    const t = Math.max(0, Math.min(distance, px * dir.x + py * dir.y + pz * dir.z));
+    const cx = px - dir.x * t;
+    const cy = py - dir.y * t;
+    const cz = pz - dir.z * t;
+    if (cx * cx + cy * cy + cz * cz < SMOKE_RADIUS * SMOKE_RADIUS) return true;
+  }
+  return false;
 }
 
 // --- buy menu ----------------------------------------------------------------
@@ -475,6 +623,7 @@ const BUY_ITEMS = [
   { id: 'rifle', name: WEAPONS.rifle.name, sub: WEAPONS.rifle.blurb, price: WEAPONS.rifle.price },
   { id: 'smg', name: WEAPONS.smg.name, sub: WEAPONS.smg.blurb, price: WEAPONS.smg.price },
   { id: 'grenade', name: GRENADE.name, sub: GRENADE.blurb, price: GRENADE.price },
+  { id: 'smoke', name: 'Smoke Grenade', sub: 'Smoke · 14s cloud · breaks sight', price: 300 },
   { id: 'armor', name: 'Kevlar Vest', sub: 'Absorbs 45% of every hit', price: ARMOR_PRICE },
 ];
 
@@ -508,6 +657,9 @@ function buy(item) {
     rig.show('smg');
   } else if (item === 'grenade' && match.spend(id, GRENADE.price)) {
     grenades += 1;
+  } else if (item === 'smoke' && match.spend(id, 300)) {
+    smokeCount += 1;
+    grenadeKind = 'smoke';
   } else if (item === 'armor' && match.spend(id, ARMOR_PRICE)) {
     playerBody.armor = 100;
   }
@@ -551,6 +703,8 @@ function respawnAll() {
   inventory.smg = null;
   playerWeapon = inventory.pistol;
   grenades = 0;
+  smokeCount = 0;
+  grenadeKind = 'he';
   rig.show('pistol');
 
   ctBots[0].body.place(ctSpawns[1]);
@@ -625,6 +779,7 @@ const ctx = {
   enemies: bodies,
   shootables: world.shootables,
   raycaster,
+  smokeBlocks,
   sounds: activeSounds,
   intel: { ct: { x: 0, z: 0, at: -99 }, t: { x: 0, z: 0, at: -99 } },
   bomb: match.state.bomb,
@@ -673,20 +828,24 @@ function handleEvents() {
   for (let i = 0; i < events.length; i += 1) {
     const event = events[i];
     if (event.type === 'roundEnd') {
-      hud.banner(event.winner === 'ct' ? 'COUNTER-TERRORISTS WIN' : 'TERRORISTS WIN', event.reason, event.winner);
+      hud.banner(event.winner === 'ct' ? 'WARDENS WIN' : 'KINDLERS WIN', event.reason, event.winner);
+      hud.radio(event.winner === 'ct' ? 'Wardens take the round' : 'Kindlers take the round', event.winner);
       hud.bombBanner(false);
       hud.setAction(null, 0);
     } else if (event.type === 'roundStart') {
       respawnAll();
-      hud.setRound(match.state.round);
+      hud.setRound(match.state.round, MATCH_ROUNDS);
       hud.banner(`ROUND ${match.state.round}`, 'Buy time — B opens the menu', null);
+      hud.radio(`Round ${match.state.round} — buy phase`, null);
     } else if (event.type === 'planted') {
       hud.bombBanner(true, event.site);
       hud.banner('BOMB PLANTED', `Site ${event.site} — hold it`, 't');
+      hud.radio(`Bomb down at ${event.site} — ${Math.ceil(match.state.bomb.timer)}s`, 't');
     } else if (event.type === 'defused' || event.type === 'exploded') {
       hud.bombBanner(false);
     } else if (event.type === 'live') {
       hud.banner('LIVE', 'Round is live', null);
+      hud.radio('Weapons free — hold your angle', null);
     }
   }
 }
@@ -796,6 +955,7 @@ bombProp.add(bombLight);
 
 function render() {
   updateSparks();
+  updateSmoke();
   updateBombProp();
   if (blastAt > elapsed - 0.32) {
     const t = (elapsed - blastAt) / 0.32;
@@ -812,6 +972,21 @@ function render() {
 }
 
 let hudAccumulator = 0;
+const MATCH_ROUNDS = 12;
+const RADAR_BOXES = world.colliders.map((b) => ({ minX: b.min.x, maxX: b.max.x, minZ: b.min.z, maxZ: b.max.z }));
+const RADAR_SITES = world.sites.map((s) => ({ name: s.name, x: s.x, z: s.z }));
+
+// "Spotted" for the radar: close and inside the view cone. The radar must never show a
+// body the player could not have seen, or the minimap becomes a wallhack.
+function spotted(body) {
+  const dx = body.position.x - playerBody.position.x;
+  const dz = body.position.z - playerBody.position.z;
+  const dist = Math.hypot(dx, dz);
+  if (dist > 18) return false;
+  const fx = -Math.sin(playerBody.yaw);
+  const fz = -Math.cos(playerBody.yaw);
+  return (dx * fx + dz * fz) / Math.max(0.001, dist) > 0.35;
+}
 
 function pushHud(dt, force = false) {
   hudAccumulator += dt;
@@ -823,7 +998,32 @@ function pushHud(dt, force = false) {
   hud.setMoney(match.moneyOf(playerBody.id));
   hud.setClock(bomb.state === 'planted' ? bomb.timer : match.state.phaseLeft, match.state.phase);
   hud.setScore(match.state.scoreCT, match.state.scoreT);
-  hud.setRound(match.state.round);
+  hud.setRound(match.state.round, MATCH_ROUNDS);
+  hud.setAlive(
+    ctBots.filter((b) => b.body.alive).length + (playerBody.alive ? 1 : 0),
+    tBots.filter((b) => b.body.alive).length,
+    3,
+    3,
+  );
+  const primaryName = playerWeapon.def.id === 'pistol' ? 'VK-47' : playerWeapon.def.name;
+  hud.setEquipment({
+    slot: playerWeapon.def.id === 'pistol' ? 2 : 1,
+    primary: primaryName,
+    secondary: 'P9',
+    frag: grenades,
+    smoke: smokeCount,
+    kind: grenadeKind,
+  });
+  hud.drawRadar({
+    half: 22,
+    boxes: RADAR_BOXES,
+    sites: RADAR_SITES,
+    player: { x: playerBody.position.x, z: playerBody.position.z, yaw: playerBody.yaw },
+    mates: ctBots.map((b) => ({ x: b.body.position.x, z: b.body.position.z, alive: b.body.alive })),
+    enemies: tBots.map((b) => ({ x: b.body.position.x, z: b.body.position.z, alive: b.body.alive, visible: spotted(b.body) })),
+    bomb: { on: bomb.state === 'planted', x: bomb.x || 0, z: bomb.z || 0 },
+    tick: match.state.round,
+  });
   const speed = Math.hypot(playerBody.velocity.x, playerBody.velocity.z);
   hud.setSpread(2 + weaponSpread(playerWeapon, speed) * 620 + reloadProgress(playerWeapon) * 6);
 }
@@ -910,6 +1110,9 @@ const SHOT_SETUP = {
     inventory.rifle.flash = 0.05;
     playerWeapon = inventory.rifle;
     rig.show('rifle');
+    grenades = 1;
+    smokeCount = 2;
+    grenadeKind = 'smoke';
     placeBot(tBots[0], 12.0, -2.2, 2.9, 100);
     placeBot(tBots[1], 15.4, -6.0, 2.4, 62);
     placeBot(tBots[2], 8.2, -1.6, 2.2, 100);
@@ -917,6 +1120,10 @@ const SHOT_SETUP = {
     placeBot(ctBots[1], 10.2, 6.0, 0.9, 100);
     hud.killFeed('<span class="ct">YOU</span> ▸ <span class="t">T-2</span>');
     hud.killFeed('<span class="t">T-1</span> ▸ <span class="ct">CT-2</span>');
+    hud.radio('Sable: two contacts, A long', 'ct');
+    // A smoke already grown, off the left lane: it sells the utility without hiding the fight.
+    spawnSmoke(6.6, 0.2, -3.4);
+    smokes[smokes.length - 1].born = elapsed - 4;
   },
   plant() {
     match.state.phase = PHASE.LIVE;
@@ -936,6 +1143,9 @@ const SHOT_SETUP = {
     inventory.rifle.mag = 22;
     playerWeapon = inventory.rifle;
     rig.show('rifle');
+    grenades = 1;
+    smokeCount = 1;
+    grenadeKind = 'he';
     placeBot(tBots[0], 15.0, -6.6, 2.4, 88);
     placeBot(ctBots[0], 12.85, -2.55, 0.84, 40);
     // The defusing bot kneels, so the pose matches the progress bar.
@@ -944,6 +1154,7 @@ const SHOT_SETUP = {
     ctBots[0].body.eye = 0.98;
     hud.bombBanner(true, 'A');
     hud.setAction('DEFUSING', 0.35);
+    hud.radio('Bomb down at A — 24s, defusing', 't');
   },
   buy() {
     match.state.phase = PHASE.BUY;
@@ -967,7 +1178,7 @@ const SHOT_SETUP = {
     placeBot(ctBots[0], -2.4, -6.0, 3.0);
     placeBot(tBots[0], 2.6, -4.4, 0.2, 0);
     tBots[0].body.alive = false;
-    hud.banner('COUNTER-TERRORISTS WIN', 'Bomb defused', 'ct');
+    hud.banner('WARDENS WIN', 'Bomb defused', 'ct');
     hud.setScore(7, 4);
   },
 };
@@ -995,7 +1206,7 @@ function runShot(name) {
 // --- boot --------------------------------------------------------------------
 syncRigs();
 syncCamera();
-hud.setRound(1);
+hud.setRound(1, MATCH_ROUNDS);
 hud.setScore(0, 0);
 hud.setVitals(100, 0);
 hud.setAmmo(playerWeapon.def.name, playerWeapon.mag, playerWeapon.reserve, grenades);

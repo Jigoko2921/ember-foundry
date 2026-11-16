@@ -234,7 +234,9 @@ export function createBot({ colliders, spawn, team, waypoints, role = 'rifle', s
     ctx.raycaster.far = distance;
     const hit = ctx.raycaster.intersectObjects(ctx.shootables, false)[0];
     ctx.raycaster.far = 96;
-    return !hit || hit.distance >= distance - 0.35;
+    if (hit && hit.distance < distance - 0.35) return false;
+    if (ctx.smokeBlocks && ctx.smokeBlocks(eye, aim, distance)) return false;
+    return true;
   }
 
   function sense(now, ctx) {

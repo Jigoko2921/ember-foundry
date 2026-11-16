@@ -101,6 +101,60 @@
   #clock.urgent { color: var(--accent); animation: tick 1s steps(2) infinite; }
   @keyframes tick { 50% { opacity: .45; } }
   #round-label { font-size: 8px; color: var(--muted); letter-spacing: .22em; margin-top: 4px; text-transform: uppercase; }
+  #round-of { font-size: 7px; color: #ffffff59; letter-spacing: .26em; margin-top: 2px; text-transform: uppercase; }
+
+  /* ---------- radar ---------- */
+  #radar-wrap { position: fixed; left: 22px; top: 22px; width: 158px; height: 158px; }
+  #radar {
+    width: 158px; height: 158px; display: block;
+    background: #080c0fd9; border: 1px solid var(--hairline);
+    box-shadow: 0 10px 34px #000a;
+    clip-path: polygon(10px 0, 100% 0, 100% calc(100% - 10px), calc(100% - 10px) 100%, 0 100%, 0 10px);
+  }
+  #radar-wrap::before {
+    content: ''; position: absolute; left: 0; top: 0; width: 2px; height: 28px;
+    background: linear-gradient(180deg, var(--accent), transparent); pointer-events: none;
+  }
+  #radar-label {
+    position: absolute; left: 10px; bottom: 7px;
+    font-family: var(--mono); font-size: 8px; letter-spacing: .2em; color: var(--muted);
+  }
+  #radar-compass {
+    position: absolute; right: 9px; top: 6px;
+    font-family: var(--mono); font-size: 8px; color: var(--accent); letter-spacing: .1em;
+  }
+
+  /* ---------- alive pips ---------- */
+  .pips { display: flex; gap: 3px; margin-top: 5px; }
+  .pips i { width: 11px; height: 3px; background: #ffffff1f; display: block; }
+  #score-ct .pips i.up { background: var(--teal); opacity: .9; }
+  #score-t .pips i.up { background: var(--accent); opacity: .9; }
+
+  /* ---------- equipment ---------- */
+  #equipment { display: flex; gap: 4px; justify-content: flex-end; margin-top: 9px; }
+  .eq {
+    display: flex; flex-direction: column; align-items: center; gap: 2px;
+    min-width: 44px; padding: 4px 6px 5px;
+    background: #0b0f12b3; border: 1px solid var(--hairline);
+    clip-path: polygon(5px 0, 100% 0, 100% calc(100% - 5px), calc(100% - 5px) 100%, 0 100%, 0 5px);
+  }
+  .eq b { font-family: var(--mono); font-size: 8px; color: var(--muted); font-weight: 400; }
+  .eq span { font-family: var(--display); font-size: 9px; letter-spacing: .1em; color: var(--ink); text-transform: uppercase; white-space: nowrap; }
+  .eq.on { border-color: var(--accent); background: #ff7a2f1a; box-shadow: 0 0 16px #ff7a2f33; }
+  .eq.on b, .eq.on span { color: var(--accent); }
+  .eq.dim { opacity: .32; }
+
+  /* ---------- radio ---------- */
+  #radio {
+    position: fixed; left: 50%; bottom: 86px; transform: translate(-50%, 8px);
+    font-family: var(--mono); font-size: 11px; letter-spacing: .06em;
+    padding: 6px 14px; background: #0b0f12d9; border-left: 2px solid var(--muted);
+    color: var(--ink); opacity: 0; transition: opacity 180ms ease, transform 180ms ease;
+    white-space: nowrap;
+  }
+  #radio.on { opacity: 1; transform: translate(-50%, 0); }
+  #radio.ct { border-left-color: var(--teal); }
+  #radio.t { border-left-color: var(--accent); }
 
   /* ---------- vitals ---------- */
   #vitals { position: fixed; left: 26px; bottom: 24px; }
@@ -225,6 +279,29 @@
   .panel h1 span { color: var(--accent); }
   .panel p { margin: 0 0 22px; color: var(--muted); line-height: 1.6; font-size: 14px; max-width: 46ch; }
 
+  /* ---------- menu composition: editorial split, not a centred card ---------- */
+  #overlay .panel { width: min(880px, 100%); }
+  .menu-grid { display: grid; grid-template-columns: minmax(0, 1fr) 262px; gap: 26px; align-items: start; }
+  .menu-main { min-width: 0; }
+  .menu-side {
+    border-left: 1px solid var(--hairline); padding-left: 24px;
+    display: flex; flex-direction: column; gap: 18px;
+  }
+  .vs { display: flex; flex-direction: column; gap: 7px; }
+  .side { padding: 9px 11px; background: #0b0f1280; border: 1px solid var(--hairline); }
+  .side b { display: block; font-family: var(--display); font-size: 15px; letter-spacing: .18em; text-transform: uppercase; }
+  .side span { display: block; font-size: 9px; letter-spacing: .18em; color: var(--muted); text-transform: uppercase; margin-top: 3px; }
+  .side.ct { border-left: 2px solid var(--teal); }
+  .side.ct b { color: var(--teal); }
+  .side.t { border-left: 2px solid var(--accent); }
+  .side.t b { color: var(--accent); }
+  .vs-mark { font-family: var(--mono); font-size: 9px; letter-spacing: .3em; color: var(--muted); text-align: center; text-transform: uppercase; }
+  .meta { display: grid; gap: 7px; }
+  .meta div { display: flex; justify-content: space-between; gap: 10px; border-bottom: 1px solid #ffffff0f; padding-bottom: 5px; }
+  .meta span { font-size: 8px; letter-spacing: .22em; color: var(--muted); text-transform: uppercase; }
+  .meta b { font-family: var(--mono); font-size: 10px; font-weight: 400; color: var(--ink); letter-spacing: .04em; }
+  .menu-main .keys { margin-top: 20px; }
+
   .btn {
     position: relative; overflow: hidden;
     font-family: var(--display); font-size: 17px; font-weight: 700; letter-spacing: .24em; text-transform: uppercase;
@@ -317,12 +394,19 @@
   <div id="hitmarker"><i></i><i></i><i></i><i></i></div>
 
   <div id="topbar">
-    <div class="team" id="score-ct">0<span class="tag">CT</span></div>
+    <div class="team" id="score-ct">0<span class="tag">Wardens</span><div class="pips" id="pips-ct"><i class="up"></i><i class="up"></i><i class="up"></i></div></div>
     <div id="clock-wrap">
       <div id="clock">0:06</div>
       <div id="round-label">ROUND 1</div>
+      <div id="round-of">OF 12</div>
     </div>
-    <div class="team" id="score-t">0<span class="tag">T</span></div>
+    <div class="team" id="score-t">0<span class="tag">Kindlers</span><div class="pips" id="pips-t"><i class="up"></i><i class="up"></i><i class="up"></i></div></div>
+  </div>
+
+  <div id="radar-wrap">
+    <canvas id="radar" width="316" height="316"></canvas>
+    <div id="radar-label">FOUNDRY YARD</div>
+    <div id="radar-compass">N</div>
   </div>
 
   <div id="bomb-banner">Bomb planted</div>
@@ -343,7 +427,10 @@
     <div id="weapon-name">P9</div>
     <div id="ammo-line"><span id="ammo-mag">12</span><span id="ammo-reserve">/ 36</span></div>
     <div id="grenade-row">HE × 0</div>
+    <div id="equipment"></div>
   </div>
+
+  <div id="radio"></div>
 
   <div id="action">
     <div id="action-label">PLANTING</div>
@@ -355,30 +442,41 @@
 
 <div id="overlay" class="overlay">
   <section class="panel" role="dialog" aria-modal="true" aria-labelledby="overlay-title">
-    <div class="kicker"><svg width="13" height="14" viewBox="0 0 13 14" fill="none"><path d="M6.5 0l1.6 3.9 4.1.3-3.1 2.7.95 4.1L6.5 8.9 3.05 11l.95-4.1L.9 4.2l4.1-.3L6.5 0z" fill="#ff7a2f"/></svg>Tactical shooter · Round based</div>
+    <div class="kicker"><svg width="13" height="14" viewBox="0 0 13 14" fill="none"><path d="M6.5 0l1.6 3.9 4.1.3-3.1 2.7.95 4.1L6.5 8.9 3.05 11l.95-4.1L.9 4.2l4.1-.3L6.5 0z" fill="#ff7a2f"/></svg>Operation 07 · Foundry Yard</div>
     <h1 id="overlay-title">Ember<br><span>Foundry</span></h1>
     <p id="overlay-copy">Two teams. Short rounds. One bomb. Buy at the bell, take a site, hold the angle — accuracy beats speed.</p>
-    <button id="play" class="btn" type="button">Deploy</button>
-    <div class="strip">
-      <div><b>3v3</b><span>Operators</span></div>
-      <div><b>2</b><span>Bomb sites</span></div>
-      <div><b>60 Hz</b><span>Fixed step</span></div>
-      <div><b>0.187</b><span>three.js</span></div>
+    <div class="menu-grid">
+      <div class="menu-main">
+        <button id="play" class="btn" type="button">Deploy</button>
+        <ul class="keys">
+          <li><kbd>WASD</kbd> Move</li>
+          <li><kbd>Mouse</kbd> Look</li>
+          <li><kbd>LMB</kbd> Fire</li>
+          <li><kbd>R</kbd> Reload</li>
+          <li><kbd>Ctrl</kbd> Crouch</li>
+          <li><kbd>Space</kbd> Jump</li>
+          <li><kbd>B</kbd> Buy menu</li>
+          <li><kbd>E</kbd> Plant / defuse</li>
+          <li><kbd>G</kbd> Grenade</li>
+          <li><kbd>1 2 3</kbd> Weapon</li>
+          <li><kbd>Tab</kbd> Scoreboard</li>
+          <li><kbd>Esc</kbd> Pause</li>
+        </ul>
+      </div>
+      <aside class="menu-side">
+        <div class="vs">
+          <div class="side ct"><b>Wardens</b><span>Defuse · hold</span></div>
+          <div class="vs-mark">vs</div>
+          <div class="side t"><b>Kindlers</b><span>Plant · push</span></div>
+        </div>
+        <div class="meta">
+          <div><span>Map</span><b>Foundry Yard</b></div>
+          <div><span>Format</span><b>Best of 12</b></div>
+          <div><span>Operators</span><b>3 v 3</b></div>
+          <div><span>Objective</span><b>Ignite · Defuse</b></div>
+        </div>
+      </aside>
     </div>
-    <ul class="keys">
-      <li><kbd>WASD</kbd> Move</li>
-      <li><kbd>Mouse</kbd> Look</li>
-      <li><kbd>LMB</kbd> Fire</li>
-      <li><kbd>R</kbd> Reload</li>
-      <li><kbd>Ctrl</kbd> Crouch</li>
-      <li><kbd>Space</kbd> Jump</li>
-      <li><kbd>B</kbd> Buy menu</li>
-      <li><kbd>E</kbd> Plant / defuse</li>
-      <li><kbd>G</kbd> Grenade</li>
-      <li><kbd>1 2 3</kbd> Weapon</li>
-      <li><kbd>Tab</kbd> Scoreboard</li>
-      <li><kbd>Esc</kbd> Pause</li>
-    </ul>
   </section>
 </div>
 
